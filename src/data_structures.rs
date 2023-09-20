@@ -53,11 +53,44 @@ impl IndexSet {
     }
 }
 
+/// BFSを繰り返すときに訪問済みかを記録する配列を毎回初期化しなくて良くするアレ
+///
+/// https://topcoder-tomerun.hatenablog.jp/entry/2022/11/06/145156
+#[derive(Debug, Clone)]
+pub struct FastClearArray {
+    values: Vec<u64>,
+    gen: u64,
+}
+
+impl FastClearArray {
+    pub fn new(len: usize) -> Self {
+        Self {
+            values: vec![0; len],
+            gen: 1,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.gen += 1;
+    }
+
+    pub fn set_true(&mut self, index: usize) {
+        self.values[index] = self.gen;
+    }
+
+    pub fn get(&self, index: usize) -> bool {
+        self.values[index] == self.gen
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use super::{FastClearArray, IndexSet};
     use itertools::Itertools;
-
-    use super::IndexSet;
 
     #[test]
     fn index_set() {
@@ -92,5 +125,21 @@ mod test {
         assert_eq!(0, set.len());
         assert!(!set.contains(1));
         assert_eq!(set.iter().copied().sorted().collect_vec(), vec![]);
+    }
+
+    #[test]
+    fn fast_clear_array() {
+        let mut array = FastClearArray::new(5);
+        assert_eq!(array.get(0), false);
+
+        array.set_true(0);
+        assert_eq!(array.get(0), true);
+        assert_eq!(array.get(1), false);
+
+        array.clear();
+        assert_eq!(array.get(0), false);
+
+        array.set_true(0);
+        assert_eq!(array.get(0), true);
     }
 }
