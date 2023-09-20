@@ -47,6 +47,10 @@ impl IndexSet {
     pub fn iter(&self) -> Iter<usize> {
         self.values.iter()
     }
+
+    pub fn as_slice(&self) -> &[usize] {
+        &self.values
+    }
 }
 
 #[cfg(test)]
@@ -65,6 +69,10 @@ mod test {
         assert!(set.contains(1));
         assert!(!set.contains(0));
         assert_eq!(set.iter().copied().sorted().collect_vec(), vec![1, 2, 5]);
+        assert_eq!(
+            set.as_slice().iter().copied().sorted().collect_vec(),
+            vec![1, 2, 5]
+        );
 
         set.add(1);
         assert_eq!(3, set.len());
@@ -80,6 +88,7 @@ mod test {
         assert_eq!(set.iter().copied().sorted().collect_vec(), vec![1]);
 
         set.remove(1);
+        set.remove(2);
         assert_eq!(0, set.len());
         assert!(!set.contains(1));
         assert_eq!(set.iter().copied().sorted().collect_vec(), vec![]);
