@@ -61,16 +61,13 @@ pub trait SmallState {
     type Action;
 
     /// ビームサーチ用スコア（大きいほど良い）
-    ///
-    /// ビームサーチの探索中に一時的に使用される。
-    /// 最終的な解はこちらではなく `score()` が最大となるものが選ばれる。
-    /// デフォルトでは生スコアをそのまま返す。
+    /// デフォルトでは生スコアをそのまま返す
     fn beam_score(&self) -> Self::Score {
-        self.score()
+        self.raw_score()
     }
 
     // 生スコア（大きいほど良い）
-    fn score(&self) -> Self::Score;
+    fn raw_score(&self) -> Self::Score;
 
     /// ハッシュ値
     fn hash(&self) -> Self::Hash;
@@ -587,13 +584,13 @@ impl<S: SmallState + Default + Clone, G: ActGen<S>> BeamSearch<S, G> {
             ..
         } = candidates
             .into_iter()
-            .max_by_key(|c| c.small_state.score())
+            .max_by_key(|c| c.small_state.beam_score())
             .expect("最終状態となる候補が見つかりませんでした。");
 
         // 操作列の復元
         let mut actions = self.restore_actions(parent);
         actions.push(small_state.action());
-        (actions, small_state.score())
+        (actions, small_state.raw_score())
     }
 
     /// ノードを追加する
@@ -800,7 +797,11 @@ mod test {
         type LargeState = LargeState;
         type Action = usize;
 
-        fn score(&self) -> Self::Score {
+        fn raw_score(&self) -> Self::Score {
+            self.distance
+        }
+
+        fn beam_score(&self) -> Self::Score {
             // 大きいほど良いとする
             -self.distance
         }
@@ -898,7 +899,7 @@ mod test {
 
         eprintln!("score: {}", score);
         eprintln!("actions: {:?}", actions);
-        assert_eq!(score, -10);
+        assert_eq!(score, 10);
         assert!(actions == vec![1, 3, 2, 0] || actions == vec![2, 3, 1, 0]);
     }
 }
