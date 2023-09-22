@@ -66,7 +66,7 @@ pub trait SmallState {
         self.raw_score()
     }
 
-    // 生スコア（大きいほど良い）
+    // 生スコア
     fn raw_score(&self) -> Self::Score;
 
     /// ハッシュ値
