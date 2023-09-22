@@ -584,7 +584,7 @@ impl<S: SmallState + Default + Clone, G: ActGen<S>> BeamSearch<S, G> {
             ..
         } = candidates
             .into_iter()
-            .max_by_key(|c| c.small_state.raw_score())
+            .max_by_key(|c| c.small_state.beam_score())
             .expect("最終状態となる候補が見つかりませんでした。");
 
         eprintln!("final score: {}", small_state.raw_score());
@@ -738,5 +738,168 @@ impl<S: SmallState + Default + Clone, G: ActGen<S>> BeamSearch<S, G> {
 
         actions.reverse();
         actions
+    }
+}
+
+#[cfg(test)]
+mod test {
+    //! TSPをビームサーチで解くテスト
+    use super::{ActGen, BeamSearch, FixedBeamWidthSuggester, NoOpDeduplicator};
+
+    #[derive(Debug, Clone)]
+    struct Input {
+        n: usize,
+        distances: Vec<Vec<i32>>,
+    }
+
+    impl Input {
+        fn gen_testcase() -> Self {
+            let n = 4;
+            let distances = vec![
+                vec![0, 2, 3, 10],
+                vec![2, 0, 1, 3],
+                vec![3, 1, 0, 2],
+                vec![10, 3, 2, 0],
+            ];
+
+            Self { n, distances }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct SmallState {
+        distance: i32,
+        position: usize,
+        visited_count: usize,
+    }
+
+    impl SmallState {
+        fn new(distance: i32, position: usize, visited_count: usize) -> Self {
+            Self {
+                distance,
+                position,
+                visited_count,
+            }
+        }
+    }
+
+    impl Default for SmallState {
+        fn default() -> Self {
+            Self {
+                distance: 0,
+                position: 0,
+                visited_count: 1,
+            }
+        }
+    }
+
+    impl super::SmallState for SmallState {
+        type Score = i32;
+        type Hash = u64;
+        type LargeState = LargeState;
+        type Action = usize;
+
+        fn raw_score(&self) -> Self::Score {
+            self.distance
+        }
+
+        fn beam_score(&self) -> Self::Score {
+            // 大きいほど良いとする
+            -self.distance
+        }
+
+        fn hash(&self) -> Self::Hash {
+            // 適当に0を返す
+            0
+        }
+
+        fn apply(&self, state: &mut Self::LargeState) {
+            // 現在地を訪問済みにする
+            state.visited[self.position] = true;
+        }
+
+        fn rollback(&self, state: &mut Self::LargeState) {
+            // 現在地を未訪問にする
+            state.visited[self.position] = false;
+        }
+
+        fn action(&self) -> Self::Action {
+            self.position
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct LargeState {
+        visited: Vec<bool>,
+    }
+
+    impl LargeState {
+        fn new(n: usize) -> Self {
+            let mut visited = vec![false; n];
+            visited[0] = true;
+            Self { visited }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct ActionGenerator<'a> {
+        input: &'a Input,
+    }
+
+    impl<'a> ActionGenerator<'a> {
+        fn new(input: &'a Input) -> Self {
+            Self { input }
+        }
+    }
+
+    impl<'a> ActGen<SmallState> for ActionGenerator<'a> {
+        fn generate(
+            &self,
+            small_state: &SmallState,
+            large_state: &LargeState,
+            next_states: &mut Vec<SmallState>,
+        ) {
+            if small_state.visited_count == self.input.n {
+                // 頂点0に戻るしかない
+                let next_pos = 0;
+                let next_dist =
+                    small_state.distance + self.input.distances[small_state.position][0];
+                let next_visited_count = small_state.visited_count + 1;
+                let next_state = SmallState::new(next_dist, next_pos, next_visited_count);
+                next_states.push(next_state);
+                return;
+            }
+
+            // 未訪問の頂点に移動
+            for next_pos in 0..self.input.n {
+                if large_state.visited[next_pos] {
+                    continue;
+                }
+
+                let next_dist =
+                    small_state.distance + self.input.distances[small_state.position][next_pos];
+                let next_visited_count = small_state.visited_count + 1;
+                let next_state = SmallState::new(next_dist, next_pos, next_visited_count);
+                next_states.push(next_state);
+            }
+        }
+    }
+
+    #[test]
+    fn beam_tsp_test() {
+        let input = Input::gen_testcase();
+        let small_state = SmallState::default();
+        let large_state = LargeState::new(input.n);
+        let action_generator = ActionGenerator::new(&input);
+        let mut beam = BeamSearch::new(large_state, small_state, action_generator);
+
+        // hashを適当に全て0としているため、重複除去は行わない
+        let deduplicator = NoOpDeduplicator;
+        let beam_width = FixedBeamWidthSuggester::new(10);
+
+        let actions = beam.run(input.n, beam_width, deduplicator);
+
+        eprintln!("{:?}", actions);
+        assert!(actions == vec![1, 3, 2, 0] || actions == vec![2, 3, 1, 0]);
     }
 }
