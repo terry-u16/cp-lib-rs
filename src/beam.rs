@@ -36,7 +36,7 @@
 //!
 //!     let deduplicator = NoOpDeduplicator;
 //!     let beam_width = FixedBeamWidthSuggester::new(100);
-//!     let actions = beam.run(2500, beam_width, deduplicator);
+//!     let (actions, score) = beam.run(2500, beam_width, deduplicator);
 //!
 //!     actions
 //! }
@@ -547,7 +547,7 @@ impl<S: SmallState + Default + Clone, G: ActGen<S>> BeamSearch<S, G> {
         max_turn: usize,
         mut beam_width_suggester: W,
         mut deduplicator: P,
-    ) -> Vec<S::Action> {
+    ) -> (Vec<S::Action>, S::Score) {
         let mut candidates = vec![];
 
         for turn in 0..max_turn {
@@ -587,12 +587,10 @@ impl<S: SmallState + Default + Clone, G: ActGen<S>> BeamSearch<S, G> {
             .max_by_key(|c| c.small_state.beam_score())
             .expect("最終状態となる候補が見つかりませんでした。");
 
-        eprintln!("final score: {}", small_state.raw_score());
-
         // 操作列の復元
         let mut actions = self.restore_actions(parent);
         actions.push(small_state.action());
-        actions
+        (actions, small_state.raw_score())
     }
 
     /// ノードを追加する
@@ -897,9 +895,11 @@ mod test {
         let deduplicator = NoOpDeduplicator;
         let beam_width = FixedBeamWidthSuggester::new(10);
 
-        let actions = beam.run(input.n, beam_width, deduplicator);
+        let (actions, score) = beam.run(input.n, beam_width, deduplicator);
 
-        eprintln!("{:?}", actions);
+        eprintln!("score: {}", score);
+        eprintln!("actions: {:?}", actions);
+        assert_eq!(score, 10);
         assert!(actions == vec![1, 3, 2, 0] || actions == vec![2, 3, 1, 0]);
     }
 }
