@@ -10,10 +10,11 @@ use std::{
 
 /// 焼きなましの状態
 pub trait State {
+    type Env;
     type Score: Score + Clone + PartialEq + Debug;
 
     /// 生スコア（大きいほど良い）
-    fn score(&self) -> Self::Score;
+    fn score(&self, env: &Self::Env) -> Self::Score;
 }
 
 pub trait Score {
@@ -43,7 +44,7 @@ impl Score for SingleScore {
 /// * 却下パターンの流れ: `preprocess()` -> `eval()` -> `rollback()`
 pub trait Neighbor {
     type Env;
-    type State: State;
+    type State: State<Env = Self::Env>;
 
     /// `eval()` 前の変形操作を行う
     fn preprocess(&mut self, _env: &Self::Env, _state: &mut Self::State);
@@ -64,12 +65,12 @@ pub trait Neighbor {
     /// 評価の打ち切りについては[焼きなまし法での評価関数の打ち切り](https://qiita.com/not522/items/cd20b87157d15850d31c)を参照。
     fn eval(
         &mut self,
-        _env: &Self::Env,
+        env: &Self::Env,
         state: &Self::State,
         _progress: f64,
         _threshold: f64,
     ) -> Option<<Self::State as State>::Score> {
-        Some(state.score())
+        Some(state.score(env))
     }
 
     /// `eval()` 後の変形操作を行う（2-optの区間reverse処理など）
@@ -150,7 +151,7 @@ impl Annealer {
         }
     }
 
-    pub fn run<E, S: State + Clone, G: NeighborGenerator<Env = E, State = S>>(
+    pub fn run<E, S: State<Env = E> + Clone, G: NeighborGenerator<Env = E, State = S>>(
         &self,
         env: &E,
         mut state: S,
@@ -158,7 +159,7 @@ impl Annealer {
         duration_sec: f64,
     ) -> (S, AnnealingStatistics) {
         let mut best_state = state.clone();
-        let mut current_score = state.score();
+        let mut current_score = state.score(&env);
         let mut best_score = current_score.annealing_score(1.0);
 
         let mut diagnostics = AnnealingStatistics::new(current_score.raw_score());
@@ -194,14 +195,14 @@ impl Annealer {
             let Some(new_score) = neighbor.eval(env, &state, progress, threshold) else {
                 // 明らかに閾値に届かない場合はreject
                 neighbor.rollback(env, &mut state);
-                debug_assert_eq!(state.score(), current_score);
+                debug_assert_eq!(state.score(&env), current_score);
                 continue;
             };
 
             if new_score.annealing_score(progress) >= threshold {
                 // 解の更新
                 neighbor.postprocess(env, &mut state);
-                debug_assert_eq!(state.score(), new_score);
+                debug_assert_eq!(state.score(&env), new_score);
 
                 current_score = new_score;
                 diagnostics.accepted_count += 1;
@@ -215,11 +216,11 @@ impl Annealer {
                 }
             } else {
                 neighbor.rollback(env, &mut state);
-                debug_assert_eq!(state.score(), current_score);
+                debug_assert_eq!(state.score(&env), current_score);
             }
         }
 
-        diagnostics.final_score = best_state.score().raw_score();
+        diagnostics.final_score = best_state.score(&env).raw_score();
 
         (best_state, diagnostics)
     }
@@ -304,9 +305,10 @@ mod test {
     }
 
     impl super::State for State {
+        type Env = Input;
         type Score = Dist;
 
-        fn score(&self) -> Self::Score {
+        fn score(&self, _env: &Self::Env) -> Self::Score {
             Dist(self.dist)
         }
     }
