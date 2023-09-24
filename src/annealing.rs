@@ -3,7 +3,10 @@
 use itertools::Itertools;
 use rand::Rng;
 use rand_pcg::Pcg64Mcg;
-use std::{fmt::Debug, time::Instant};
+use std::{
+    fmt::{Debug, Display},
+    time::Instant,
+};
 
 /// 焼きなましの状態
 pub trait State {
@@ -90,6 +93,41 @@ pub trait NeighborGenerator {
     ) -> Box<dyn Neighbor<Env = Self::Env, State = Self::State>>;
 }
 
+/// 焼きなましの統計データ
+#[derive(Debug, Clone, Copy)]
+pub struct AnnealingStatistics {
+    all_iter: usize,
+    accepted_count: usize,
+    updated_count: usize,
+    init_score: i64,
+    final_score: i64,
+}
+
+impl AnnealingStatistics {
+    fn new(init_score: i64) -> Self {
+        Self {
+            all_iter: 0,
+            accepted_count: 0,
+            updated_count: 0,
+            init_score,
+            final_score: init_score,
+        }
+    }
+}
+
+impl Display for AnnealingStatistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "===== annealing =====")?;
+        writeln!(f, "init score : {}", self.init_score)?;
+        writeln!(f, "score      : {}", self.final_score)?;
+        writeln!(f, "all iter   : {}", self.all_iter)?;
+        writeln!(f, "accepted   : {}", self.accepted_count)?;
+        writeln!(f, "updated    : {}", self.updated_count)?;
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Annealer {
     /// 開始温度
@@ -118,15 +156,12 @@ impl Annealer {
         mut state: S,
         neighbor_generator: &G,
         duration_sec: f64,
-    ) -> S {
+    ) -> (S, AnnealingStatistics) {
         let mut best_state = state.clone();
         let mut current_score = state.score();
         let mut best_score = current_score.annealing_score(1.0);
-        let init_score = best_score;
 
-        let mut all_iter = 0;
-        let mut accepted_count = 0;
-        let mut update_count = 0;
+        let mut diagnostics = AnnealingStatistics::new(current_score.raw_score());
         let mut rng = Pcg64Mcg::new(self.seed);
         let mut threshold_generator = ThresholdGenerator::new(rng.gen());
 
@@ -137,8 +172,9 @@ impl Annealer {
         let mut temperature = self.start_temp;
 
         loop {
-            all_iter += 1;
-            if all_iter % self.clock_interval == 0 {
+            diagnostics.all_iter += 1;
+
+            if diagnostics.all_iter % self.clock_interval == 0 {
                 progress = (Instant::now() - since).as_secs_f64() * duration_inv;
                 temperature =
                     f64::powf(self.start_temp, 1.0 - progress) * f64::powf(self.end_temp, progress);
@@ -168,14 +204,14 @@ impl Annealer {
                 debug_assert_eq!(state.score(), new_score);
 
                 current_score = new_score;
-                accepted_count += 1;
+                diagnostics.accepted_count += 1;
 
                 let new_score = current_score.annealing_score(1.0);
 
                 if best_score < new_score {
                     best_score = new_score;
                     best_state = state.clone();
-                    update_count += 1;
+                    diagnostics.updated_count += 1;
                 }
             } else {
                 neighbor.rollback(env, &mut state);
@@ -183,15 +219,9 @@ impl Annealer {
             }
         }
 
-        eprintln!("===== annealing =====");
-        eprintln!("init score : {}", init_score);
-        eprintln!("score      : {}", best_score);
-        eprintln!("all iter   : {}", all_iter);
-        eprintln!("accepted   : {}", accepted_count);
-        eprintln!("updated    : {}", update_count);
-        eprintln!("");
+        diagnostics.final_score = best_state.score().raw_score();
 
-        best_state
+        (best_state, diagnostics)
     }
 }
 
@@ -384,7 +414,9 @@ mod test {
         let annealer = Annealer::new(1e1, 1e-1, 42, 1000);
         let neighbor_generator = NeighborGenerator;
 
-        let state = annealer.run(&input, state, &neighbor_generator, 0.1);
+        let (state, diagnostics) = annealer.run(&input, state, &neighbor_generator, 0.1);
+
+        eprintln!("{}", diagnostics);
 
         eprintln!("score: {}", state.dist);
         eprintln!("state.dist: {:?}", state.order);
