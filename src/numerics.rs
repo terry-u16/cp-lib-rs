@@ -1,4 +1,5 @@
 use num::PrimInt;
+use num_traits::NumAssign;
 
 /// 最大公約数を求める
 ///
@@ -41,8 +42,73 @@ pub fn lcm<T: PrimInt>(a: T, b: T) -> T {
     a / gcd(a, b) * b
 }
 
+/// 約数を列挙する
+///
+/// 約数を列挙するイテレータを返す
+/// 約数は順不同であることに注意
+///
+/// # Examples
+///
+/// ```
+/// use cp_lib_rs::numerics::calc_divisiors;
+/// use itertools::*;
+///
+/// let div = calc_divisiors(12).sorted().collect_vec();
+/// assert_eq!(div, vec![1, 2, 3, 4, 6, 12]);
+/// ```
+pub fn calc_divisiors<T: PrimInt + NumAssign>(n: T) -> impl Iterator<Item = T> {
+    Divisiors::new(n)
+}
+
+pub struct Divisiors<T: PrimInt> {
+    n: T,
+    i: T,
+    pair: Option<T>,
+}
+
+impl<T: PrimInt> Divisiors<T> {
+    fn new(n: T) -> Self {
+        assert!(n > T::zero());
+
+        Self {
+            n,
+            i: T::one(),
+            pair: None,
+        }
+    }
+}
+
+impl<T: PrimInt + NumAssign> Iterator for Divisiors<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(v) = self.pair.take() {
+            return Some(v);
+        }
+
+        while self.i * self.i <= self.n {
+            let i = self.i;
+            self.i += T::one();
+
+            if self.n % i == T::zero() {
+                let pair = self.n / i;
+
+                if pair != i {
+                    self.pair = Some(pair);
+                }
+
+                return Some(i);
+            }
+        }
+
+        None
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use itertools::Itertools;
+
     use super::*;
 
     #[test]
@@ -69,5 +135,14 @@ mod test {
     #[should_panic]
     fn lcm_ng() {
         lcm(-1, 1);
+    }
+
+    #[test]
+    fn divisiors() {
+        let div = calc_divisiors(12).sorted().collect_vec();
+        assert_eq!(div, vec![1, 2, 3, 4, 6, 12]);
+
+        let div = calc_divisiors(16).sorted().collect_vec();
+        assert_eq!(div, vec![1, 2, 4, 8, 16]);
     }
 }
