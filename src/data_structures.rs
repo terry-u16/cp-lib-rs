@@ -1,4 +1,8 @@
-use std::slice::Iter;
+use ac_library::Monoid;
+use std::{
+    ops::{Bound, RangeBounds},
+    slice::Iter,
+};
 
 /// [0, n) の整数の集合を管理する定数倍が軽いデータ構造
 ///
@@ -87,9 +91,103 @@ impl FastClearArray {
     }
 }
 
+/// Disjoint Sparse Table
+///
+/// モノイドに対して、区間クエリを O(1) で処理するデータ構造
+///
+/// - 初期化: O(N log N)
+/// - クエリ: O(1)
+///
+/// # Examples
+///
+/// ```
+/// use ac_library::Additive;
+/// use cp_lib_rs::data_structures::DisjointSparseTable;
+///
+/// let v = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+/// let dst = DisjointSparseTable::<Additive<_>>::new(&v);
+///
+/// assert_eq!(dst.prod(0..3), 8);
+/// ```
+#[derive(Debug, Clone)]
+pub struct DisjointSparseTable<M: Monoid> {
+    n: usize,
+    data: Vec<Vec<M::S>>,
+}
+
+impl<M: Monoid> DisjointSparseTable<M> {
+    pub fn new(v: &[M::S]) -> Self {
+        let n = v.len();
+        let ceil_n = 1 << ((n - 1).ilog2() + 1);
+        let mut data = vec![];
+        let mut v = v.to_vec();
+        v.resize(ceil_n, M::identity());
+
+        let mut double_len = 2;
+        let mut len = double_len >> 1;
+
+        while double_len <= ceil_n {
+            let mut data_k = vec![M::identity(); ceil_n];
+
+            for center in (len..n).step_by(double_len) {
+                // 左側
+                data_k[center - 1] = v[center - 1].clone();
+
+                for i in (center - len..center - 1).rev() {
+                    data_k[i] = M::binary_operation(&v[i], &data_k[i + 1]);
+                }
+
+                // 右側
+                data_k[center] = v[center].clone();
+
+                for i in center + 1..center + len {
+                    data_k[i] = M::binary_operation(&v[i], &data_k[i - 1]);
+                }
+            }
+
+            data.push(data_k);
+            double_len <<= 1;
+            len <<= 1;
+        }
+
+        Self { n, data }
+    }
+
+    pub fn prod(&self, range: impl RangeBounds<usize>) -> M::S {
+        // 半開区間で受け取る
+        let r = match range.end_bound() {
+            Bound::Included(r) => r + 1,
+            Bound::Excluded(r) => *r,
+            Bound::Unbounded => self.n,
+        };
+        let l = match range.start_bound() {
+            Bound::Included(l) => *l,
+            Bound::Excluded(l) => l + 1,
+            Bound::Unbounded => 0,
+        };
+
+        assert!(l <= r && r <= self.n);
+
+        if r - l == 0 {
+            return M::identity();
+        } else if r - l == 1 {
+            return self.data[0][l].clone();
+        }
+
+        // 閉区間にする
+        let r = r - 1;
+
+        // MSB (Most Significant Bit) の取得
+        let k = (l ^ r).ilog2() as usize;
+
+        M::binary_operation(&self.data[k][l], &self.data[k][r])
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use super::{FastClearArray, IndexSet};
+    use super::*;
+    use ac_library::Additive;
     use itertools::Itertools;
 
     #[test]
@@ -141,5 +239,20 @@ mod test {
 
         array.set_true(0);
         assert_eq!(array.get(0), true);
+    }
+
+    #[test]
+    fn dst_add() {
+        let v = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+        let n = v.len();
+        let dst = DisjointSparseTable::<Additive<_>>::new(&v);
+
+        for l in 0..=n {
+            for r in l..=n {
+                let expected = v[l..r].iter().copied().sum::<i32>();
+                let actual = dst.prod(l..r);
+                assert_eq!(expected, actual);
+            }
+        }
     }
 }
