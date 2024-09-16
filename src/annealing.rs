@@ -30,7 +30,7 @@ pub trait Score {
 
 /// 単一の値からなるスコア
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SingleScore(i64);
+pub struct SingleScore(pub i64);
 
 impl Score for SingleScore {
     fn raw_score(&self) -> i64 {
