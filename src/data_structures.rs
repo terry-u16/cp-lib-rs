@@ -1,4 +1,6 @@
 use ac_library::Monoid;
+use rand::prelude::*;
+use rand::thread_rng;
 use std::{
     ops::{Bound, RangeBounds},
     slice::Iter,
@@ -154,17 +156,7 @@ impl<M: Monoid> DisjointSparseTable<M> {
     }
 
     pub fn prod(&self, range: impl RangeBounds<usize>) -> M::S {
-        // 半開区間で受け取る
-        let r = match range.end_bound() {
-            Bound::Included(r) => r + 1,
-            Bound::Excluded(r) => *r,
-            Bound::Unbounded => self.n,
-        };
-        let l = match range.start_bound() {
-            Bound::Included(l) => *l,
-            Bound::Excluded(l) => l + 1,
-            Bound::Unbounded => 0,
-        };
+        let (l, r) = as_half_open_range(range, self.n);
 
         assert!(l <= r && r <= self.n);
 
@@ -181,6 +173,98 @@ impl<M: Monoid> DisjointSparseTable<M> {
         let k = (l ^ r).ilog2() as usize;
 
         M::binary_operation(&self.data[k][l], &self.data[k][r])
+    }
+}
+
+fn as_half_open_range(range: impl RangeBounds<usize>, n: usize) -> (usize, usize) {
+    // 半開区間で受け取る
+    let l = match range.start_bound() {
+        Bound::Included(l) => *l,
+        Bound::Excluded(l) => l + 1,
+        Bound::Unbounded => 0,
+    };
+
+    let r = match range.end_bound() {
+        Bound::Included(r) => r + 1,
+        Bound::Excluded(r) => *r,
+        Bound::Unbounded => n,
+    };
+
+    (l, r)
+}
+
+/// ローリングハッシュ
+///
+/// - 初期化: O(N)
+/// - ハッシュ値の取得: O(1)
+///
+///
+/// # Examples
+///
+/// ```
+/// use cp_lib_rs::data_structures::RollingHash;
+///
+/// let s = "mississippi";
+/// let rolling_hash = RollingHash::new(s.chars());
+///
+/// assert!(rolling_hash.hash(2..5) == rolling_hash.hash(5..8));
+/// assert!(rolling_hash.hash(0..3) != rolling_hash.hash(1..4));
+/// ```
+#[derive(Debug, Clone)]
+pub struct RollingHash {
+    len: usize,
+    hashes: Vec<u64>,
+    pow: Vec<u64>,
+}
+
+impl RollingHash {
+    const MOD: u64 = (1 << 61) - 1;
+
+    pub fn new(values: impl IntoIterator<Item = impl Into<u64>>) -> Self {
+        let values = values.into_iter();
+        let base = thread_rng().gen_range(1 << 60..Self::MOD);
+        let mut pow = vec![1];
+        let mut hashes = vec![0];
+        let len = values.size_hint().0;
+        pow.reserve(len);
+        hashes.reserve(len);
+
+        for (i, v) in values.enumerate() {
+            pow.push(Self::mul_mod(pow[i], base));
+
+            // 0が来ると"0"と"00"の区別が付かなくて困るので+1しておく
+            let mut hash = Self::mul_mod(hashes[i], base) as u64 + v.into() + 1;
+            if hash >= Self::MOD {
+                hash -= Self::MOD;
+            }
+            hashes.push(hash);
+        }
+
+        let len = hashes.len() - 1;
+        Self { pow, hashes, len }
+    }
+
+    pub fn hash(&self, range: impl RangeBounds<usize>) -> u64 {
+        let (l, r) = as_half_open_range(range, self.len);
+        let hash = Self::MOD + self.hashes[r] - Self::mul_mod(self.hashes[l], self.pow[r - l]);
+
+        if hash >= Self::MOD {
+            hash - Self::MOD
+        } else {
+            hash
+        }
+    }
+
+    fn mul_mod(a: u64, b: u64) -> u64 {
+        // https://qiita.com/keymoon/items/11fac5627672a6d6a9f6#%E4%BD%99%E8%AB%87128bit%E7%92%B0%E5%A2%83%E3%81%AB%E3%81%8A%E3%81%91%E3%82%8B%E5%AE%9F%E8%A3%85%E3%81%AE%E7%B0%A1%E6%98%93%E5%8C%96%E3%81%AE%E8%A9%B1
+        let t = a as u128 * b as u128;
+        let t = (t >> 61) as u64 + ((t as u64) & Self::MOD);
+
+        if t >= Self::MOD {
+            t - Self::MOD
+        } else {
+            t
+        }
     }
 }
 
@@ -252,6 +336,28 @@ mod test {
                 let expected = v[l..r].iter().copied().sum::<i32>();
                 let actual = dst.prod(l..r);
                 assert_eq!(expected, actual);
+            }
+        }
+    }
+
+    #[test]
+    fn rolling_hash() {
+        let s = "mississippi".chars().collect_vec();
+        let rolling_hash = RollingHash::new(s.iter().copied());
+
+        for l0 in 0..=s.len() {
+            for r0 in l0..=s.len() {
+                let hash0 = rolling_hash.hash(l0..r0);
+                let s0 = s[l0..r0].iter().collect::<String>();
+
+                for l1 in 0..=s.len() {
+                    for r1 in l1..=s.len() {
+                        let hash1 = rolling_hash.hash(l1..r1);
+                        let s1 = s[l1..r1].iter().collect::<String>();
+
+                        assert_eq!(hash0 == hash1, s0 == s1);
+                    }
+                }
             }
         }
     }
