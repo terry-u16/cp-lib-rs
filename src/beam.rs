@@ -5,8 +5,10 @@
 //! # Usage
 //!
 //! ```
+//! use cp_lib_rs::beam;
 //!
 //! // 状態のうち、差分計算を行わない部分
+//! #[derive(Clone, Default)]
 //! struct SmallState;
 //!
 //! impl beam::SmallState for SmallState {
@@ -15,7 +17,11 @@
 //!     type LargeState = LargeState;
 //!     type Action = usize;
 //!
-//!     // 略
+//!     fn raw_score(&self) -> <Self as beam::SmallState>::Score { todo!() }
+//!     fn hash(&self) -> <Self as beam::SmallState>::Hash { todo!() }
+//!     fn apply(&self, state: &mut <Self as beam::SmallState>::LargeState) { todo!() }
+//!     fn rollback(&self, state: &mut <Self as beam::SmallState>::LargeState) { todo!() }
+//!     fn action(&self) -> <Self as beam::SmallState>::Action { todo!() }
 //! }
 //!
 //! // 状態のうち、差分計算を行う部分
@@ -24,18 +30,23 @@
 //! // 次の行動を生成する構造体
 //! struct ActionGenerator;
 //!
-//! impl ActGen<SmallState> for ActionGenerator {
-//!     // 略
+//! impl beam::ActGen<SmallState> for ActionGenerator {
+//!     fn generate(&self, small_state: &SmallState, large_state: &<SmallState as beam::SmallState>::LargeState, actions: &mut Vec<SmallState>) {
+//!         // 状態を生成してactionsに追加する
+//!         for _ in 0..0 {
+//!            actions.push(SmallState);
+//!         }
+//!     }
 //! }
 //!
 //! fn beam() -> Vec<usize> {
 //!     let large_state = LargeState;
 //!     let small_state = SmallState;
 //!     let action_generator = ActionGenerator;
-//!     let mut beam = BeamSearch::new(large_state, small_state, action_generator);
+//!     let mut beam = beam::BeamSearch::new(large_state, small_state, action_generator);
 //!
-//!     let deduplicator = NoOpDeduplicator;
-//!     let beam_width = FixedBeamWidthSuggester::new(100);
+//!     let deduplicator = beam::NoOpDeduplicator;
+//!     let beam_width = beam::FixedBeamWidthSuggester::new(100);
 //!     let (actions, score) = beam.run(2500, beam_width, deduplicator);
 //!
 //!     actions

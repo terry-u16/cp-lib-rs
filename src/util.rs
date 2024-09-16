@@ -3,12 +3,12 @@
 use num::PrimInt;
 
 /// 最小値と最大値を更新するトレイト
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
-/// use cp_lib_rs::common::ChangeMinMax;
-/// 
+/// use cp_lib_rs::util::ChangeMinMax;
+///
 /// let mut x = 10;
 /// assert!(x.change_min(3));
 /// assert_eq!(x, 3);
@@ -40,7 +40,7 @@ impl<T: PartialOrd> ChangeMinMax for T {
 ///
 /// ```
 /// use cp_lib_rs::mat;
-/// 
+///
 /// let a = mat![0; 4; 3];
 /// assert_eq!(a, vec![vec![0; 3]; 4]);
 /// ```
@@ -57,7 +57,9 @@ macro_rules! mat {
 /// # Examples
 ///
 /// ```
-/// let result = cp_lib_rs::common::binary_search(0, 10, |x| x * x <= 5);
+/// use cp_lib_rs::util::binary_search;
+///
+/// let result = binary_search(0, 10, |x| x * x <= 5);
 /// assert_eq!(result, 2);
 /// ```
 pub fn binary_search<T: PrimInt>(ok: T, ng: T, f: impl Fn(T) -> bool) -> T {
