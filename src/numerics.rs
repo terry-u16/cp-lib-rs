@@ -105,6 +105,67 @@ impl<T: PrimInt + NumAssign> Iterator for Divisiors<T> {
     }
 }
 
+/// 素因数分解を行う
+///
+/// # Examples
+///
+/// ```
+/// use cp_lib_rs::numerics::prime_factorize;
+/// use itertools::*;
+///
+/// let factors = prime_factorize(12).sorted().collect_vec();
+/// assert_eq!(factors, vec![(2, 2), (3, 1)]);
+/// ```
+pub fn prime_factorize<T: PrimInt + NumAssign>(n: T) -> impl Iterator<Item = (T, usize)> {
+    PrimeFactorize::new(n)
+}
+
+struct PrimeFactorize<T: PrimInt + NumAssign> {
+    n: T,
+    i: T,
+}
+
+impl<T: PrimInt + NumAssign> PrimeFactorize<T> {
+    fn new(n: T) -> Self {
+        assert!(n > T::zero());
+
+        Self {
+            n,
+            i: T::one() + T::one(),
+        }
+    }
+}
+
+impl<T: PrimInt + NumAssign> Iterator for PrimeFactorize<T> {
+    type Item = (T, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.i * self.i <= self.n {
+            let i = self.i;
+            self.i += T::one();
+
+            if self.n % i == T::zero() {
+                let mut count = 0;
+
+                while self.n % i == T::zero() {
+                    count += 1;
+                    self.n /= i;
+                }
+
+                return Some((i, count));
+            }
+        }
+
+        if self.n != T::one() {
+            let n = self.n;
+            self.n = T::one();
+            return Some((n, 1));
+        }
+
+        None
+    }
+}
+
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
@@ -144,5 +205,20 @@ mod test {
 
         let div = calc_divisiors(16).sorted().collect_vec();
         assert_eq!(div, vec![1, 2, 4, 8, 16]);
+    }
+
+    #[test]
+    fn prime_factorize_ok() {
+        let factors = prime_factorize(12).sorted().collect_vec();
+        assert_eq!(factors, vec![(2, 2), (3, 1)]);
+
+        let factors = prime_factorize(16).sorted().collect_vec();
+        assert_eq!(factors, vec![(2, 4)]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn prime_factorize_ng() {
+        prime_factorize(0).count();
     }
 }
