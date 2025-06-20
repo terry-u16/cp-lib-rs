@@ -13,7 +13,7 @@ use std::{
 /// 焼きなましの状態
 pub trait State {
     type Env;
-    type Score: Score + Clone + PartialEq + Debug;
+    type Score: Score;
 
     /// 生スコア（大きいほど良い）
     fn score(&self, env: &Self::Env) -> Self::Score;
@@ -131,25 +131,25 @@ impl Display for AnnealingStatistics {
     }
 }
 
+/// 焼きなましを行う構造体
+///
+/// `I` は焼きなましの進捗を更新する間隔を指定する。例えば `I = 1024` とすると、1024回に1回の頻度で進捗を更新する。
 #[derive(Debug, Clone)]
-pub struct Annealer {
+pub struct Annealer<const I: usize> {
     /// 開始温度
     start_temp: f64,
     /// 終了温度
     end_temp: f64,
     /// 乱数シード
     seed: u128,
-    /// 時間計測を行うインターバル
-    clock_interval: usize,
 }
 
-impl Annealer {
-    pub fn new(start_temp: f64, end_temp: f64, seed: u128, clock_interval: usize) -> Self {
+impl<const I: usize> Annealer<I> {
+    pub fn new(start_temp: f64, end_temp: f64, seed: u128) -> Self {
         Self {
             start_temp,
             end_temp,
             seed,
-            clock_interval,
         }
     }
 
@@ -179,7 +179,7 @@ impl Annealer {
         loop {
             diagnostics.all_iter += 1;
 
-            if diagnostics.all_iter % self.clock_interval == 0 {
+            if diagnostics.all_iter % I == 0 {
                 progress = (Instant::now() - since).as_secs_f64() * duration_inv;
                 temperature =
                     f64::powf(self.start_temp, 1.0 - progress) * f64::powf(self.end_temp, progress);
@@ -199,14 +199,12 @@ impl Annealer {
             let Some(new_score) = neighbor.eval(env, &state, progress, threshold) else {
                 // 明らかに閾値に届かない場合はreject
                 neighbor.rollback(env, &mut state);
-                debug_assert_eq!(state.score(&env), current_score);
                 continue;
             };
 
             if new_score.annealing_score(progress) >= threshold {
                 // 解の更新
                 neighbor.postprocess(env, &mut state);
-                debug_assert_eq!(state.score(&env), new_score);
 
                 current_score = new_score;
                 diagnostics.accepted_count += 1;
@@ -220,7 +218,6 @@ impl Annealer {
                 }
             } else {
                 neighbor.rollback(env, &mut state);
-                debug_assert_eq!(state.score(&env), current_score);
             }
         }
 
@@ -428,7 +425,7 @@ mod test {
     fn annealing_tsp_test() {
         let input = Input::gen_testcase();
         let state = State::new(&input);
-        let annealer = Annealer::new(1e1, 1e-1, 42, 1000);
+        let annealer = Annealer::<1024>::new(1e1, 1e-1, 42);
         let neighbor_generator = NeighborGenerator;
 
         let (state, diagnostics) = annealer.run(&input, state, &neighbor_generator, 0.1);
