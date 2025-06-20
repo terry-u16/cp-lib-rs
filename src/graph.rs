@@ -5,7 +5,7 @@ use std::ops::Index;
 /// # Examples
 ///
 /// ```
-/// use abc362_d::RowCompressedGraph;
+/// use cp_lib_rs::graph::{RowCompressedGraph, UnweightedEdge};
 /// use itertools::Itertools;
 ///
 /// let nodes = vec!["hoge", "fuga", "piyo"];
@@ -13,13 +13,12 @@ use std::ops::Index;
 ///     (1, UnweightedEdge::new(2)),
 ///     (2, UnweightedEdge::new(0)),
 ///     (0, UnweightedEdge::new(1)),
-///     (0, UnweightedEdge::new(3)),
 /// ];
-/// let graph = RowCompressedGraph::new_edges(3, edges);
+/// let graph = RowCompressedGraph::new(3, nodes, edges);
 ///
 /// assert_eq!(graph.len(), 3);
 /// assert_eq!(graph.nodes()[0], "hoge");
-/// assert_eq!(graph[0].sorted().collect_vec(), [UnweightedEdge::new(1), UnweightedEdge::new(3)]);
+/// assert_eq!(graph[0].iter().sorted().copied().collect_vec(), [UnweightedEdge::new(1)]);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RowCompressedGraph<V, E> {
