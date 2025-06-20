@@ -4,7 +4,9 @@ use itertools::Itertools;
 use rand::Rng;
 use rand_pcg::Pcg64Mcg;
 use std::{
+    cell::RefCell,
     fmt::{Debug, Display},
+    rc::Rc,
     time::Instant,
 };
 
@@ -25,7 +27,7 @@ pub trait Score {
     }
 
     /// 生スコア
-    fn raw_score(&self) -> i64;
+    fn raw_score(&self) -> f64;
 }
 
 /// 単一の値からなるスコア
@@ -33,8 +35,8 @@ pub trait Score {
 pub struct SingleScore(pub i64);
 
 impl Score for SingleScore {
-    fn raw_score(&self) -> i64 {
-        self.0
+    fn raw_score(&self) -> f64 {
+        self.0 as f64
     }
 }
 
@@ -74,10 +76,10 @@ pub trait Neighbor {
     }
 
     /// `eval()` 後の変形操作を行う（2-optの区間reverse処理など）
-    fn postprocess(&mut self, _env: &Self::Env, _state: &mut Self::State);
+    fn postprocess(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State);
 
     /// `preprocess()` で変形した `state` をロールバックする
-    fn rollback(&mut self, _env: &Self::Env, _state: &mut Self::State);
+    fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State);
 }
 
 /// 焼きなましの近傍を生成する構造体
@@ -100,12 +102,12 @@ pub struct AnnealingStatistics {
     all_iter: usize,
     accepted_count: usize,
     updated_count: usize,
-    init_score: i64,
-    final_score: i64,
+    init_score: f64,
+    final_score: f64,
 }
 
 impl AnnealingStatistics {
-    fn new(init_score: i64) -> Self {
+    fn new(init_score: f64) -> Self {
         Self {
             all_iter: 0,
             accepted_count: 0,
@@ -164,7 +166,9 @@ impl Annealer {
 
         let mut diagnostics = AnnealingStatistics::new(current_score.raw_score());
         let mut rng = Pcg64Mcg::new(self.seed);
-        let mut threshold_generator = ThresholdGenerator::new(rng.gen());
+        let threshold_generator = ThresholdGenerator::get_singleton();
+        let mut threshold_generator = threshold_generator.borrow_mut();
+        threshold_generator.set_pos(rng.gen());
 
         let duration_inv = 1.0 / duration_sec;
         let since = Instant::now();
@@ -236,6 +240,9 @@ struct ThresholdGenerator {
 
 impl ThresholdGenerator {
     const LEN: usize = 1 << 16;
+    thread_local! {
+        static THRESHOLD_GENERATOR: Rc<RefCell<ThresholdGenerator>> = Rc::new(RefCell::new(ThresholdGenerator::new(42)));
+    }
 
     fn new(seed: u128) -> Self {
         let mut rng = Pcg64Mcg::new(seed);
@@ -254,6 +261,14 @@ impl ThresholdGenerator {
         let threshold = prev_score + temperature * self.log_randoms[self.iter % Self::LEN];
         self.iter += 1;
         threshold
+    }
+
+    fn set_pos(&mut self, pos: usize) {
+        self.iter = pos % Self::LEN;
+    }
+
+    fn get_singleton() -> Rc<RefCell<Self>> {
+        Self::THRESHOLD_GENERATOR.with(|cell| cell.clone())
     }
 }
 
@@ -322,8 +337,8 @@ mod test {
             -self.0 as f64
         }
 
-        fn raw_score(&self) -> i64 {
-            self.0 as i64
+        fn raw_score(&self) -> f64 {
+            self.0 as f64
         }
     }
 
@@ -374,14 +389,14 @@ mod test {
             Some(Dist(new_dist))
         }
 
-        fn postprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
+        fn postprocess(self: Box<Self>, _env: &Self::Env, state: &mut Self::State) {
             state.order[self.begin..self.end].reverse();
             state.dist = self
                 .new_dist
                 .expect("postprocess()を呼ぶ前にeval()を呼んでください。");
         }
 
-        fn rollback(&mut self, _env: &Self::Env, _state: &mut Self::State) {
+        fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State) {
             // do nothing
         }
     }

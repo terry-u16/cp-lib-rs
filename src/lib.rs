@@ -4,3 +4,4 @@ pub mod data_structures;
 pub mod grid;
 pub mod util;
 pub mod numerics;
+pub mod graph;
