@@ -1,6 +1,9 @@
-use std::ops::{Add, AddAssign, Index, IndexMut};
+use std::{
+    fmt::Display,
+    ops::{Add, AddAssign, Index, IndexMut},
+};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Coord {
     row: u8,
     col: u8,
@@ -26,8 +29,8 @@ impl Coord {
         self.row < size as u8 && self.col < size as u8
     }
 
-    pub const fn to_index(&self, size: usize) -> usize {
-        self.row as usize * size + self.col as usize
+    const fn to_index(&self, size: usize) -> CoordIndex {
+        CoordIndex(self.row as usize * size + self.col as usize)
     }
 
     pub const fn dist(&self, other: &Self) -> usize {
@@ -39,7 +42,22 @@ impl Coord {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+impl Display for Coord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}, {})", self.row, self.col)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CoordIndex(pub usize);
+
+impl CoordIndex {
+    pub const fn to_coord(&self, size: usize) -> Coord {
+        Coord::new(self.0 / size, self.0 % size)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CoordDiff {
     dr: i8,
     dc: i8,
@@ -66,6 +84,12 @@ impl CoordDiff {
 
     pub const fn dc(&self) -> i32 {
         self.dc as i32
+    }
+}
+
+impl Display for CoordDiff {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}, {})", self.dr, self.dc)
     }
 }
 
@@ -107,6 +131,10 @@ impl<T> Map2d<T> {
         debug_assert!(size * size == map.len());
         Self { size, map }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.map.iter()
+    }
 }
 
 impl<T: Default + Clone> Map2d<T> {
@@ -121,14 +149,14 @@ impl<T> Index<Coord> for Map2d<T> {
 
     #[inline]
     fn index(&self, coordinate: Coord) -> &Self::Output {
-        &self.map[coordinate.to_index(self.size)]
+        &self.map[coordinate.to_index(self.size).0]
     }
 }
 
 impl<T> IndexMut<Coord> for Map2d<T> {
     #[inline]
     fn index_mut(&mut self, coordinate: Coord) -> &mut Self::Output {
-        &mut self.map[coordinate.to_index(self.size)]
+        &mut self.map[coordinate.to_index(self.size).0]
     }
 }
 
@@ -137,14 +165,14 @@ impl<T> Index<&Coord> for Map2d<T> {
 
     #[inline]
     fn index(&self, coordinate: &Coord) -> &Self::Output {
-        &self.map[coordinate.to_index(self.size)]
+        &self.map[coordinate.to_index(self.size).0]
     }
 }
 
 impl<T> IndexMut<&Coord> for Map2d<T> {
     #[inline]
     fn index_mut(&mut self, coordinate: &Coord) -> &mut Self::Output {
-        &mut self.map[coordinate.to_index(self.size)]
+        &mut self.map[coordinate.to_index(self.size).0]
     }
 }
 
@@ -165,6 +193,22 @@ impl<T> IndexMut<usize> for Map2d<T> {
         let begin = row * self.size;
         let end = begin + self.size;
         &mut self.map[begin..end]
+    }
+}
+
+impl<T> Index<CoordIndex> for Map2d<T> {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, index: CoordIndex) -> &Self::Output {
+        &self.map[index.0]
+    }
+}
+
+impl<T> IndexMut<CoordIndex> for Map2d<T> {
+    #[inline]
+    fn index_mut(&mut self, index: CoordIndex) -> &mut Self::Output {
+        &mut self.map[index.0]
     }
 }
 
@@ -192,14 +236,14 @@ impl<T, const N: usize> Index<Coord> for ConstMap2d<T, N> {
 
     #[inline]
     fn index(&self, coordinate: Coord) -> &Self::Output {
-        &self.map[coordinate.to_index(N)]
+        &self.map[coordinate.to_index(N).0]
     }
 }
 
 impl<T, const N: usize> IndexMut<Coord> for ConstMap2d<T, N> {
     #[inline]
     fn index_mut(&mut self, coordinate: Coord) -> &mut Self::Output {
-        &mut self.map[coordinate.to_index(N)]
+        &mut self.map[coordinate.to_index(N).0]
     }
 }
 
@@ -208,14 +252,14 @@ impl<T, const N: usize> Index<&Coord> for ConstMap2d<T, N> {
 
     #[inline]
     fn index(&self, coordinate: &Coord) -> &Self::Output {
-        &self.map[coordinate.to_index(N)]
+        &self.map[coordinate.to_index(N).0]
     }
 }
 
 impl<T, const N: usize> IndexMut<&Coord> for ConstMap2d<T, N> {
     #[inline]
     fn index_mut(&mut self, coordinate: &Coord) -> &mut Self::Output {
-        &mut self.map[coordinate.to_index(N)]
+        &mut self.map[coordinate.to_index(N).0]
     }
 }
 
@@ -236,6 +280,22 @@ impl<T, const N: usize> IndexMut<usize> for ConstMap2d<T, N> {
         let begin = row * N;
         let end = begin + N;
         &mut self.map[begin..end]
+    }
+}
+
+impl<T, const N: usize> Index<CoordIndex> for ConstMap2d<T, N> {
+    type Output = T;
+
+    #[inline]
+    fn index(&self, index: CoordIndex) -> &Self::Output {
+        &self.map[index.0]
+    }
+}
+
+impl<T, const N: usize> IndexMut<CoordIndex> for ConstMap2d<T, N> {
+    #[inline]
+    fn index_mut(&mut self, index: CoordIndex) -> &mut Self::Output {
+        &mut self.map[index.0]
     }
 }
 
