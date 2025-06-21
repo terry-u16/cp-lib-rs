@@ -1,3 +1,4 @@
+#![macro_use]
 //! 焼きなましライブラリ
 //!
 use itertools::Itertools;
@@ -109,6 +110,21 @@ pub trait NeighborGenerator {
     ) -> Option<Box<dyn Neighbor<Env = Self::Env, State = Self::State>>>;
 }
 
+/// WeightedNeighborGenerator用の簡易マクロ
+#[macro_export]
+macro_rules! weighted_neighbor {
+    ( $( $ty:ident => $weight:expr ),+ $(,)? ) => {
+        $crate::annealing::WeightedNeighborGenerator::new(vec![
+            $(
+                (Box::new(|env, state, rng, progress| $ty::gen(env, state, rng, progress)), $weight),
+            )+
+        ])
+    };
+}
+
+/// 複数の近傍生成器を重み付きで選択する近傍生成器
+/// 
+/// `weighted_neighbor! { NeighborA => 1.0, NeighborB => 2.0 }` のように使用する。
 pub struct WeightedNeighborGenerator<E, S: State<Env = E>> {
     weights: WeightedAliasIndex<f64>,
     generators: Vec<
@@ -525,10 +541,10 @@ mod test {
         let input = Input::gen_testcase();
         let state = State::new(&input);
         let annealer = Annealer::<1024>::new(1e1, 1e-1, 42);
-        let neighbor_generator = WeightedNeighborGenerator::new(vec![
-            (Box::new(NoOp::gen), 0.5),
-            (Box::new(TwoOpt::gen), 1.0),
-        ]);
+        let neighbor_generator = crate::weighted_neighbor! {
+            NoOp => 1.0,
+            TwoOpt => 2.0,
+        };
 
         let (state, diagnostics) = annealer.run(&input, state, &neighbor_generator, 0.1);
 
