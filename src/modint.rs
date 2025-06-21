@@ -43,3 +43,46 @@ impl<T: ModIntBase> Comb<T> {
         self.fact[n] * self.inv_fact[n - k]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ac_library::modint::ModInt998244353;
+
+    #[test]
+    fn test_comb_basic() {
+        let comb = Comb::<ModInt998244353>::new(10);
+        // 5C2 = 10
+        assert_eq!(comb.comb(5, 2).val(), 10);
+        // 10C0 = 1
+        assert_eq!(comb.comb(10, 0).val(), 1);
+        // 10C10 = 1
+        assert_eq!(comb.comb(10, 10).val(), 1);
+        // 10C1 = 10
+        assert_eq!(comb.comb(10, 1).val(), 10);
+        // 10C2 = 45
+        assert_eq!(comb.comb(10, 2).val(), 45);
+    }
+
+    #[test]
+    fn test_perm_basic() {
+        let comb = Comb::<ModInt998244353>::new(10);
+        // 5P2 = 20
+        assert_eq!(comb.perm(5, 2).val(), 20);
+        // 10P0 = 1
+        assert_eq!(comb.perm(10, 0).val(), 1);
+        // 10P10 = 3628800
+        assert_eq!(comb.perm(10, 10).val(), 3628800);
+    }
+
+    #[test]
+    fn test_fact_inv_fact() {
+        let comb = Comb::<ModInt998244353>::new(5);
+        // 5! = 120
+        assert_eq!(comb.fact(5).val(), 120);
+        // 0! = 1
+        assert_eq!(comb.fact(0).val(), 1);
+        // inv_fact[5] * fact[5] = 1
+        assert_eq!((comb.inv_fact(5) * comb.fact(5)).val(), 1);
+    }
+}
