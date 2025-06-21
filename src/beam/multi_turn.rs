@@ -100,7 +100,7 @@ pub trait Action: Clone + Eq + Default {
 /// 状態のコストを評価するための構造体
 /// メモリ使用量をできるだけ小さくしてください
 pub trait Evaluator: Clone {
-    type Cost: Copy + Ord + LowerBounded + Default + Display;
+    type Cost: Copy + PartialOrd + LowerBounded + Default + Display;
 
     fn evaluate(&self) -> Self::Cost;
 }
@@ -334,10 +334,10 @@ impl<A: Action, E: Evaluator, H: BeamHash, const N: usize> NodeSelector<A, E, H,
     fn calculate_best_candidate(&self) -> Option<&Candidate<A, E, H>> {
         match &self.cost_segtree {
             Some(segtree) => (0..self.beam_width)
-                .min_by_key(|&i| segtree.get(i).0)
+                .min_by(|&i, &j| segtree.get(i).0.partial_cmp(&segtree.get(j).0).unwrap())
                 .map(|i| &self.candidates[i]),
             None => (0..self.candidates.len())
-                .min_by_key(|&i| self.costs[i].0)
+                .min_by(|&i, &j| self.costs[i].0.partial_cmp(&self.costs[j].0).unwrap())
                 .map(|i| &self.candidates[i]),
         }
     }
@@ -735,11 +735,14 @@ impl<W: BeamWidthSuggester, const N: usize> BeamSearch<W, N> {
             }
 
             // ターン数最小化型の問題で実行可能解が見つかったとき
-            if let Some(cand) = selector
-                .finished_candidates
-                .iter()
-                .min_by_key(|c| c.evaluator.evaluate())
-            {
+            let finished_min = selector.finished_candidates.iter().min_by(|c1, c2| {
+                c1.evaluator
+                    .evaluate()
+                    .partial_cmp(&c2.evaluator.evaluate())
+                    .unwrap()
+            });
+
+            if let Some(cand) = finished_min {
                 let mut actions = tree.restore_path(cand.parent_id);
                 actions.push(cand.action.clone());
                 return Ok(actions);

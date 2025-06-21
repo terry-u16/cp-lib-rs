@@ -315,7 +315,7 @@ pub(super) struct MaxCostIndex<T>(Infallible, PhantomData<fn() -> T>);
 
 impl<T> Monoid for MaxCostIndex<T>
 where
-    T: Copy + Ord + LowerBounded + Default,
+    T: Copy + PartialOrd + LowerBounded + Default,
 {
     type S = (T, usize);
 

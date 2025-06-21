@@ -26,7 +26,7 @@ pub trait Action: Clone + Eq {
 /// 状態のコストを評価するための構造体
 /// メモリ使用量をできるだけ小さくしてください
 pub trait Evaluator: Clone {
-    type Cost: Copy + Ord + LowerBounded + Default + Display;
+    type Cost: Copy + PartialOrd + LowerBounded + Default + Display;
 
     fn evaluate(&self) -> Self::Cost;
 }
@@ -548,11 +548,14 @@ impl<W: BeamWidthSuggester, const N: usize> BeamSearch<W, N> {
             }
 
             // ターン数最小化型の問題で実行可能解が見つかったとき
-            if let Some(cand) = selector
-                .finished_candidates
-                .iter()
-                .min_by_key(|c| c.evaluator.evaluate())
-            {
+            let finished_min = selector.finished_candidates.iter().min_by(|c1, c2| {
+                c1.evaluator
+                    .evaluate()
+                    .partial_cmp(&c2.evaluator.evaluate())
+                    .unwrap()
+            });
+
+            if let Some(cand) = finished_min {
                 let mut actions = tree.restore_path(cand.parent_id);
                 actions.push(cand.action.clone());
                 return Ok(actions);
