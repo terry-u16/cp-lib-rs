@@ -96,7 +96,9 @@ pub trait Neighbor {
     fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State);
 
     /// 近傍の名前
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
 }
 
 /// 焼きなましの近傍を生成する構造体
@@ -239,9 +241,11 @@ impl Display for AnnealingStatistics {
         for (name, &selected) in self.selected.iter() {
             let accepted = self.accepted.get(name).copied().unwrap_or(0);
             let precent = accepted as f64 / selected as f64 * 100.0;
+            let name = name.split("::").last().unwrap_or(name);
+
             writeln!(
                 f,
-                "{:11}: {} / {} ({:.1}%)",
+                "{:11}: {} / {} ({:.2}%)",
                 name, accepted, selected, precent
             )?;
         }
@@ -489,10 +493,6 @@ mod test {
         fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State) {
             // do nothing
         }
-
-        fn name(&self) -> &'static str {
-            "NoOp"
-        }
     }
 
     struct TwoOpt {
@@ -570,10 +570,6 @@ mod test {
 
         fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State) {
             // do nothing
-        }
-
-        fn name(&self) -> &'static str {
-            "TwoOpt"
         }
     }
 
