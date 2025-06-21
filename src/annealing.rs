@@ -1,7 +1,8 @@
 //! 焼きなましライブラリ
-
+//!
 use itertools::Itertools;
-use rand::Rng;
+use rand::{distributions::Distribution, Rng as _};
+use rand_distr::WeightedAliasIndex;
 use rand_pcg::Pcg64Mcg;
 use std::{
     cell::RefCell,
@@ -9,6 +10,8 @@ use std::{
     rc::Rc,
     time::Instant,
 };
+
+pub type AnnealingRng = Pcg64Mcg;
 
 /// 焼きなましの状態
 pub trait State {
@@ -47,6 +50,15 @@ impl Score for SingleScore {
 pub trait Neighbor {
     type Env;
     type State: State<Env = Self::Env>;
+
+    fn gen(
+        env: &Self::Env,
+        state: &Self::State,
+        rng: &mut AnnealingRng,
+        progress: f64,
+    ) -> Option<Box<dyn Neighbor<Env = Self::Env, State = Self::State>>>
+    where
+        Self: Sized;
 
     /// `eval()` 前の変形操作を行う
     fn preprocess(&mut self, _env: &Self::Env, _state: &mut Self::State);
@@ -92,8 +104,62 @@ pub trait NeighborGenerator {
         &self,
         env: &Self::Env,
         state: &Self::State,
-        rng: &mut impl Rng,
-    ) -> Box<dyn Neighbor<Env = Self::Env, State = Self::State>>;
+        rng: &mut AnnealingRng,
+        progress: f64,
+    ) -> Option<Box<dyn Neighbor<Env = Self::Env, State = Self::State>>>;
+}
+
+pub struct WeightedNeighborGenerator<E, S: State<Env = E>> {
+    weights: WeightedAliasIndex<f64>,
+    generators: Vec<
+        Box<
+            dyn Fn(&E, &S, &mut AnnealingRng, f64) -> Option<Box<dyn Neighbor<Env = E, State = S>>>,
+        >,
+    >,
+}
+
+impl<E, S: State<Env = E>> WeightedNeighborGenerator<E, S> {
+    pub fn new(
+        candidates: Vec<(
+            Box<
+                dyn Fn(
+                    &E,
+                    &S,
+                    &mut AnnealingRng,
+                    f64,
+                ) -> Option<Box<dyn Neighbor<Env = E, State = S>>>,
+            >,
+            f64,
+        )>,
+    ) -> Self {
+        let weights: Vec<f64> = candidates.iter().map(|c| c.1).collect();
+        let weights = WeightedAliasIndex::new(weights)
+            .expect("weights must be non-negative and not all zero");
+        let generators = candidates.into_iter().map(|(gen, _)| gen).collect_vec();
+        Self {
+            weights,
+            generators,
+        }
+    }
+}
+
+impl<E, S> NeighborGenerator for WeightedNeighborGenerator<E, S>
+where
+    S: State<Env = E>,
+{
+    type Env = E;
+    type State = S;
+
+    fn generate(
+        &self,
+        env: &Self::Env,
+        state: &Self::State,
+        rng: &mut AnnealingRng,
+        progress: f64,
+    ) -> Option<Box<dyn Neighbor<Env = Self::Env, State = Self::State>>> {
+        let idx = self.weights.sample(rng);
+        (self.generators[idx])(env, state, rng, progress)
+    }
 }
 
 /// 焼きなましの統計データ
@@ -190,7 +256,11 @@ impl<const I: usize> Annealer<I> {
             }
 
             // 変形
-            let mut neighbor = neighbor_generator.generate(env, &state, &mut rng);
+            let Some(mut neighbor) = neighbor_generator.generate(env, &state, &mut rng, progress)
+            else {
+                continue;
+            };
+
             neighbor.preprocess(env, &mut state);
 
             // スコア計算
@@ -274,6 +344,8 @@ mod test {
     use itertools::Itertools;
     use rand::Rng;
 
+    use crate::annealing::WeightedNeighborGenerator;
+
     use super::{Annealer, Neighbor, Score};
 
     #[derive(Debug, Clone)]
@@ -339,6 +411,37 @@ mod test {
         }
     }
 
+    struct NoOp;
+
+    impl Neighbor for NoOp {
+        type Env = Input;
+        type State = State;
+
+        fn gen(
+            _env: &Self::Env,
+            _state: &Self::State,
+            _rng: &mut super::AnnealingRng,
+            _progress: f64,
+        ) -> Option<Box<dyn Neighbor<Env = Self::Env, State = Self::State>>>
+        where
+            Self: Sized,
+        {
+            Some(Box::new(NoOp))
+        }
+
+        fn preprocess(&mut self, _env: &Self::Env, _state: &mut Self::State) {
+            // do nothing
+        }
+
+        fn postprocess(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State) {
+            // do nothing
+        }
+
+        fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State) {
+            // do nothing
+        }
+    }
+
     struct TwoOpt {
         begin: usize,
         end: usize,
@@ -358,6 +461,25 @@ mod test {
     impl Neighbor for TwoOpt {
         type Env = Input;
         type State = State;
+
+        fn gen(
+            _env: &Self::Env,
+            state: &Self::State,
+            rng: &mut super::AnnealingRng,
+            _progress: f64,
+        ) -> Option<Box<dyn Neighbor<Env = Self::Env, State = Self::State>>>
+        where
+            Self: Sized,
+        {
+            loop {
+                let begin = rng.gen_range(1..state.order.len());
+                let end = rng.gen_range(1..state.order.len());
+
+                if begin + 2 <= end {
+                    return Some(Box::new(TwoOpt::new(begin, end)));
+                }
+            }
+        }
 
         fn preprocess(&mut self, _env: &Self::Env, _state: &mut Self::State) {
             // do nothing
@@ -398,35 +520,15 @@ mod test {
         }
     }
 
-    struct NeighborGenerator;
-
-    impl super::NeighborGenerator for NeighborGenerator {
-        type Env = Input;
-        type State = State;
-
-        fn generate(
-            &self,
-            _env: &Self::Env,
-            state: &Self::State,
-            rng: &mut impl Rng,
-        ) -> Box<dyn Neighbor<Env = Self::Env, State = Self::State>> {
-            loop {
-                let begin = rng.gen_range(1..state.order.len());
-                let end = rng.gen_range(1..state.order.len());
-
-                if begin + 2 <= end {
-                    return Box::new(TwoOpt::new(begin, end));
-                }
-            }
-        }
-    }
-
     #[test]
     fn annealing_tsp_test() {
         let input = Input::gen_testcase();
         let state = State::new(&input);
         let annealer = Annealer::<1024>::new(1e1, 1e-1, 42);
-        let neighbor_generator = NeighborGenerator;
+        let neighbor_generator = WeightedNeighborGenerator::new(vec![
+            (Box::new(NoOp::gen), 0.5),
+            (Box::new(TwoOpt::gen), 1.0),
+        ]);
 
         let (state, diagnostics) = annealer.run(&input, state, &neighbor_generator, 0.1);
 
