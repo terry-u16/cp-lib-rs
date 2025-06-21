@@ -3,7 +3,7 @@ use std::{
     ops::{Add, AddAssign, Index, IndexMut},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Coord {
     row: u8,
     col: u8,
@@ -48,7 +48,7 @@ impl Display for Coord {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct CoordIndex(pub usize);
 
 impl CoordIndex {
@@ -57,7 +57,7 @@ impl CoordIndex {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct CoordDiff {
     dr: i8,
     dc: i8,
