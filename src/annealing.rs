@@ -27,7 +27,8 @@ pub trait State {
 pub trait Score {
     /// 焼きなまし用スコア（大きいほど良い）
     /// デフォルトでは生スコアをそのまま返す
-    fn annealing_score(&self, _progress: f64) -> f64 {
+    #[allow(unused_variables)]
+    fn annealing_score(&self, progress: f64) -> f64 {
         self.raw_score() as f64
     }
 
@@ -63,7 +64,7 @@ pub trait Neighbor {
         Self: Sized;
 
     /// `eval()` 前の変形操作を行う
-    fn preprocess(&mut self, _env: &Self::Env, _state: &mut Self::State);
+    fn preprocess(&mut self, env: &Self::Env, state: &mut Self::State);
 
     /// 変形後の状態の評価を行う
     ///
@@ -79,21 +80,22 @@ pub trait Neighbor {
     /// 現在の状態のスコア。スコアが `threshold` を下回ることが明らかな場合は `None` を返すことで評価の打ち切りを行うことができる。
     ///
     /// 評価の打ち切りについては[焼きなまし法での評価関数の打ち切り](https://qiita.com/not522/items/cd20b87157d15850d31c)を参照。
+    #[allow(unused_variables)]
     fn eval(
         &mut self,
         env: &Self::Env,
         state: &Self::State,
-        _progress: f64,
-        _threshold: f64,
+        progress: f64,
+        threshold: f64,
     ) -> Option<<Self::State as State>::Score> {
         Some(state.score(env))
     }
 
     /// `eval()` 後の変形操作を行う（2-optの区間reverse処理など）
-    fn postprocess(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State);
+    fn postprocess(self: Box<Self>, env: &Self::Env, state: &mut Self::State);
 
     /// `preprocess()` で変形した `state` をロールバックする
-    fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State);
+    fn rollback(self: Box<Self>, env: &Self::Env, state: &mut Self::State);
 
     /// 近傍の名前
     fn name(&self) -> &'static str {
