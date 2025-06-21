@@ -118,6 +118,10 @@ pub const ADJACENTS: [CoordDiff; 4] = [
     CoordDiff::new(0, -1),
 ];
 
+pub const U: usize = 0;
+pub const R: usize = 1;
+pub const D: usize = 2;
+pub const L: usize = 3;
 pub const DIRECTIONS: [char; 4] = ['U', 'R', 'D', 'L'];
 
 #[derive(Debug, Clone)]
