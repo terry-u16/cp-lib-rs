@@ -7,6 +7,7 @@ use rand_distr::WeightedAliasIndex;
 use rand_pcg::Pcg64Mcg;
 use std::{
     cell::RefCell,
+    collections::BTreeMap,
     fmt::{Debug, Display},
     rc::Rc,
     time::Instant,
@@ -93,6 +94,9 @@ pub trait Neighbor {
 
     /// `preprocess()` で変形した `state` をロールバックする
     fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State);
+
+    /// 近傍の名前
+    fn name(&self) -> &'static str;
 }
 
 /// 焼きなましの近傍を生成する構造体
@@ -123,7 +127,7 @@ macro_rules! weighted_neighbor {
 }
 
 /// 複数の近傍生成器を重み付きで選択する近傍生成器
-/// 
+///
 /// `weighted_neighbor! { NeighborA => 1.0, NeighborB => 2.0 }` のように使用する。
 pub struct WeightedNeighborGenerator<E, S: State<Env = E>> {
     weights: WeightedAliasIndex<f64>,
@@ -179,24 +183,46 @@ where
 }
 
 /// 焼きなましの統計データ
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AnnealingStatistics {
     all_iter: usize,
+    valid_iter: usize,
     accepted_count: usize,
     updated_count: usize,
     init_score: f64,
     final_score: f64,
+    selected: BTreeMap<&'static str, usize>,
+    accepted: BTreeMap<&'static str, usize>,
 }
 
 impl AnnealingStatistics {
     fn new(init_score: f64) -> Self {
         Self {
             all_iter: 0,
+            valid_iter: 0,
             accepted_count: 0,
             updated_count: 0,
             init_score,
             final_score: init_score,
+            selected: BTreeMap::new(),
+            accepted: BTreeMap::new(),
         }
+    }
+
+    fn select(&mut self, name: &'static str) {
+        self.valid_iter += 1;
+        self.selected
+            .entry(name)
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
+    }
+
+    fn accept(&mut self, name: &'static str) {
+        self.accepted_count += 1;
+        self.accepted
+            .entry(name)
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
     }
 }
 
@@ -206,8 +232,19 @@ impl Display for AnnealingStatistics {
         writeln!(f, "init score : {}", self.init_score)?;
         writeln!(f, "score      : {}", self.final_score)?;
         writeln!(f, "all iter   : {}", self.all_iter)?;
+        writeln!(f, "valid iter : {}", self.valid_iter)?;
         writeln!(f, "accepted   : {}", self.accepted_count)?;
         writeln!(f, "updated    : {}", self.updated_count)?;
+
+        for (name, &selected) in self.selected.iter() {
+            let accepted = self.accepted.get(name).copied().unwrap_or(0);
+            let precent = accepted as f64 / selected as f64 * 100.0;
+            writeln!(
+                f,
+                "{:11}: {} / {} ({:.1}%)",
+                name, accepted, selected, precent
+            )?;
+        }
 
         Ok(())
     }
@@ -259,8 +296,6 @@ impl<const I: usize> Annealer<I> {
         let mut temperature = self.start_temp;
 
         loop {
-            diagnostics.all_iter += 1;
-
             if diagnostics.all_iter % I == 0 {
                 progress = (Instant::now() - since).as_secs_f64() * duration_inv;
                 temperature =
@@ -271,12 +306,15 @@ impl<const I: usize> Annealer<I> {
                 }
             }
 
+            diagnostics.all_iter += 1;
+
             // 変形
             let Some(mut neighbor) = neighbor_generator.generate(env, &state, &mut rng, progress)
             else {
                 continue;
             };
 
+            diagnostics.select(neighbor.name());
             neighbor.preprocess(env, &mut state);
 
             // スコア計算
@@ -289,11 +327,9 @@ impl<const I: usize> Annealer<I> {
             };
 
             if new_score.annealing_score(progress) >= threshold {
-                // 解の更新
-                neighbor.postprocess(env, &mut state);
-
+                diagnostics.accept(neighbor.name());
                 current_score = new_score;
-                diagnostics.accepted_count += 1;
+                neighbor.postprocess(env, &mut state);
 
                 let new_score = current_score.annealing_score(1.0);
 
@@ -357,12 +393,9 @@ impl ThresholdGenerator {
 
 #[cfg(test)]
 mod test {
+    use super::{Annealer, Neighbor, Score};
     use itertools::Itertools;
     use rand::Rng;
-
-    use crate::annealing::WeightedNeighborGenerator;
-
-    use super::{Annealer, Neighbor, Score};
 
     #[derive(Debug, Clone)]
     struct Input {
@@ -456,6 +489,10 @@ mod test {
         fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State) {
             // do nothing
         }
+
+        fn name(&self) -> &'static str {
+            "NoOp"
+        }
     }
 
     struct TwoOpt {
@@ -533,6 +570,10 @@ mod test {
 
         fn rollback(self: Box<Self>, _env: &Self::Env, _state: &mut Self::State) {
             // do nothing
+        }
+
+        fn name(&self) -> &'static str {
+            "TwoOpt"
         }
     }
 
