@@ -1,6 +1,5 @@
-#![macro_use]
 //! 焼きなましライブラリ
-//!
+#![macro_use]
 use itertools::Itertools;
 use rand::{distributions::Distribution, Rng as _};
 use rand_distr::WeightedAliasIndex;
@@ -29,7 +28,7 @@ pub trait Score {
     /// デフォルトでは生スコアをそのまま返す
     #[allow(unused_variables)]
     fn annealing_score(&self, progress: f64) -> f64 {
-        self.raw_score() as f64
+        self.raw_score()
     }
 
     /// 生スコア
@@ -37,12 +36,12 @@ pub trait Score {
 }
 
 /// 単一の値からなるスコア
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SingleScore(pub i64);
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct SingleScore(pub f64);
 
 impl Score for SingleScore {
     fn raw_score(&self) -> f64 {
-        self.0 as f64
+        self.0
     }
 }
 
