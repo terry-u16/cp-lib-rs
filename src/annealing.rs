@@ -53,7 +53,7 @@ pub trait Neighbor {
     type Env;
     type State: State<Env = Self::Env>;
 
-    fn gen(
+    fn generate(
         env: &Self::Env,
         state: &Self::State,
         rng: &mut AnnealingRng,
@@ -122,7 +122,11 @@ macro_rules! weighted_neighbor {
     ( $( $ty:ident => $weight:expr ),+ $(,)? ) => {
         $crate::annealing::WeightedNeighborGenerator::new(vec![
             $(
-                (Box::new(|env, state, rng, progress| $ty::gen(env, state, rng, progress)), $weight),
+                ({
+                    // 無理矢理useする
+                    use crate::annealing::Neighbor as _;
+                    Box::new(|env, state, rng, progress| $ty::generate(env, state, rng, progress))
+                }, $weight),
             )+
         ])
     };
@@ -397,7 +401,6 @@ impl ThresholdGenerator {
 
 #[cfg(test)]
 mod test {
-    use super::{Annealer, Neighbor, Score};
     use itertools::Itertools;
     use rand::Rng;
 
@@ -453,7 +456,7 @@ mod test {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct Dist(i32);
 
-    impl Score for Dist {
+    impl super::Score for Dist {
         fn annealing_score(&self, _progress: f64) -> f64 {
             // 大きい方が良いとするため符号を反転
             -self.0 as f64
@@ -466,16 +469,16 @@ mod test {
 
     struct NoOp;
 
-    impl Neighbor for NoOp {
+    impl super::Neighbor for NoOp {
         type Env = Input;
         type State = State;
 
-        fn gen(
+        fn generate(
             _env: &Self::Env,
             _state: &Self::State,
             _rng: &mut super::AnnealingRng,
             _progress: f64,
-        ) -> Option<Box<dyn Neighbor<Env = Self::Env, State = Self::State>>>
+        ) -> Option<Box<dyn super::Neighbor<Env = Self::Env, State = Self::State>>>
         where
             Self: Sized,
         {
@@ -511,16 +514,16 @@ mod test {
         }
     }
 
-    impl Neighbor for TwoOpt {
+    impl super::Neighbor for TwoOpt {
         type Env = Input;
         type State = State;
 
-        fn gen(
+        fn generate(
             _env: &Self::Env,
             state: &Self::State,
             rng: &mut super::AnnealingRng,
             _progress: f64,
-        ) -> Option<Box<dyn Neighbor<Env = Self::Env, State = Self::State>>>
+        ) -> Option<Box<dyn super::Neighbor<Env = Self::Env, State = Self::State>>>
         where
             Self: Sized,
         {
@@ -577,7 +580,7 @@ mod test {
     fn annealing_tsp_test() {
         let input = Input::gen_testcase();
         let state = State::new(&input);
-        let annealer = Annealer::<1024>::new(1e1, 1e-1, 42);
+        let annealer = super::Annealer::<1024>::new(1e1, 1e-1, 42);
         let neighbor_generator = crate::weighted_neighbor! {
             NoOp => 1.0,
             TwoOpt => 2.0,
