@@ -136,6 +136,18 @@ impl<T> Map2d<T> {
         Self { size, map }
     }
 
+    pub fn from_fn(mut f: impl FnMut(Coord) -> T, size: usize) -> Self {
+        let mut map = Vec::with_capacity(size * size);
+
+        for row in 0..size {
+            for col in 0..size {
+                map.push(f(Coord::new(row, col)));
+            }
+        }
+
+        Self { size, map }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.map.iter()
     }
@@ -224,6 +236,18 @@ pub struct ConstMap2d<T, const N: usize> {
 impl<T, const N: usize> ConstMap2d<T, N> {
     pub fn new(map: Vec<T>) -> Self {
         assert_eq!(map.len(), N * N);
+        Self { map }
+    }
+
+    pub fn from_fn(mut f: impl FnMut(Coord) -> T) -> Self {
+        let mut map = Vec::with_capacity(N * N);
+
+        for row in 0..N {
+            for col in 0..N {
+                map.push(f(Coord::new(row, col)));
+            }
+        }
+
         Self { map }
     }
 }
