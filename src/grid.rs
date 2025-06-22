@@ -29,7 +29,7 @@ impl Coord {
         self.row < size as u8 && self.col < size as u8
     }
 
-    const fn to_index(&self, size: usize) -> CoordIndex {
+    pub const fn to_index(&self, size: usize) -> CoordIndex {
         CoordIndex(self.row as usize * size + self.col as usize)
     }
 
@@ -38,7 +38,7 @@ impl Coord {
     }
 
     const fn dist_1d(x0: u8, x1: u8) -> usize {
-        (x0 as i64 - x1 as i64).abs() as usize
+        x0.abs_diff(x1) as usize
     }
 }
 
