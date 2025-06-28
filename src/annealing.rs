@@ -140,9 +140,8 @@ pub trait NeighborEnum: Sized {
 ///         Insert => 0.5,
 ///     ]
 /// }
-/// 
-/// let annealer = super::Annealer::<Neighbors, 128>::new(1e1, 1e-1, 42);
-/// let (state, diagnostics) = annealer.run(&input, state, Duration::from_millis(1000));
+///
+/// let (state, stats) = run_annealing::<Neighbors, 128>(&input, state, 1e1, 1e-1, Duration::from_millis(1000), 42);
 /// ```
 #[macro_export]
 macro_rules! neighbors {
@@ -329,105 +328,101 @@ impl<N: NeighborEnum> Display for AnnealingStatistics<N> {
     }
 }
 
-/// 焼きなましを行う構造体
+/// 焼きなましを実行する関数
 ///
+/// `N` は近傍のセットを表すenumで、`NeighborEnum` トレイトを実装している必要がある。
 /// `I` は焼きなましの進捗を更新する間隔を指定する。例えば `I = 1024` とすると、1024回に1回の頻度で進捗を更新する。
-#[derive(Debug)]
-pub struct Annealer<N: NeighborEnum, const I: usize> {
-    /// 開始温度
+///
+/// # Usage
+///
+/// ```ignore
+/// neighbors! {
+///     Neighbors, Env, State, [
+///         TwoOpt => 1.0,
+///         Swap => 2.0,
+///         Insert => 0.5,
+///     ]
+/// }
+///
+/// let (state, stats) = run_annealing::<Neighbors, 128>(&input, state, 1e1, 1e-1, Duration::from_millis(1000), 42);
+/// ```
+pub fn run_annealing<N: NeighborEnum, const I: usize>(
+    env: &N::Env,
+    mut state: N::State,
     start_temp: f64,
-    /// 終了温度
     end_temp: f64,
-    /// 乱数シード
+    duration: Duration,
     seed: u128,
-    _phantom: std::marker::PhantomData<N>,
-}
+) -> (N::State, AnnealingStatistics<N>) {
+    let mut best_state = state.clone();
+    let mut current_score = state.score(&env);
+    let mut best_score = current_score.annealing_score(1.0);
 
-impl<N: NeighborEnum, const I: usize> Annealer<N, I> {
-    pub fn new(start_temp: f64, end_temp: f64, seed: u128) -> Self {
-        Self {
-            start_temp,
-            end_temp,
-            seed,
-            _phantom: std::marker::PhantomData,
-        }
-    }
+    let mut stats = AnnealingStatistics::new(current_score.raw_score());
+    let mut rng = AnnealingRng::new(seed);
+    let neighbor_weights = WeightedAliasIndex::new(N::get_neighbor_weights().to_vec())
+        .expect("weights must be non-negative and not all zero");
+    let threshold_generator = ThresholdGenerator::get_singleton();
+    let mut threshold_generator = threshold_generator.borrow_mut();
+    threshold_generator.set_pos(rng.gen());
 
-    pub fn run(
-        &self,
-        env: &N::Env,
-        mut state: N::State,
-        duration: Duration,
-    ) -> (N::State, AnnealingStatistics<N>) {
-        let mut best_state = state.clone();
-        let mut current_score = state.score(&env);
-        let mut best_score = current_score.annealing_score(1.0);
+    let since = Instant::now();
+    let duration_inv = 1.0 / duration.as_secs_f64();
 
-        let mut stats = AnnealingStatistics::new(current_score.raw_score());
-        let mut rng = AnnealingRng::new(self.seed);
-        let neighbor_weights = WeightedAliasIndex::new(N::get_neighbor_weights().to_vec())
-            .expect("weights must be non-negative and not all zero");
-        let threshold_generator = ThresholdGenerator::get_singleton();
-        let mut threshold_generator = threshold_generator.borrow_mut();
-        threshold_generator.set_pos(rng.gen());
+    let mut progress = 0.0;
+    let mut temperature = start_temp;
 
-        let since = Instant::now();
+    loop {
+        if stats.all_iter % I == 0 {
+            progress = since.elapsed().as_secs_f64() * duration_inv;
+            temperature = start_temp.powf(1.0 - progress) * end_temp.powf(progress);
 
-        let mut progress = 0.0;
-        let mut temperature = self.start_temp;
-
-        loop {
-            if stats.all_iter % I == 0 {
-                progress = since.elapsed().as_secs_f64() / duration.as_secs_f64();
-                temperature = self.start_temp.powf(1.0 - progress) * self.end_temp.powf(progress);
-
-                if progress >= 1.0 {
-                    break;
-                }
-            }
-
-            stats.all_iter += 1;
-
-            // 変形
-            let neighbor_index = neighbor_weights.sample(&mut rng);
-            let Some(mut neighbor) = N::generate(env, &state, &mut rng, progress, neighbor_index)
-            else {
-                continue;
-            };
-
-            stats.select(neighbor_index);
-            neighbor.preprocess(env, &mut state);
-
-            // スコア計算
-            let threshold =
-                threshold_generator.next(current_score.annealing_score(progress), temperature);
-            let Some(new_score) = neighbor.eval(env, &state, progress, threshold) else {
-                // 明らかに閾値に届かない場合はreject
-                neighbor.rollback(env, &mut state);
-                continue;
-            };
-
-            if new_score.annealing_score(progress) >= threshold {
-                stats.accept(neighbor_index);
-                current_score = new_score;
-                neighbor.postprocess(env, &mut state);
-
-                let new_score = current_score.annealing_score(1.0);
-
-                if best_score < new_score {
-                    best_score = new_score;
-                    best_state = state.clone();
-                    stats.updated_count += 1;
-                }
-            } else {
-                neighbor.rollback(env, &mut state);
+            if progress >= 1.0 {
+                break;
             }
         }
 
-        stats.final_score = best_state.score(&env).raw_score();
+        stats.all_iter += 1;
 
-        (best_state, stats)
+        // 変形
+        let neighbor_index = neighbor_weights.sample(&mut rng);
+        let Some(mut neighbor) = N::generate(env, &state, &mut rng, progress, neighbor_index)
+        else {
+            continue;
+        };
+
+        stats.select(neighbor_index);
+        neighbor.preprocess(env, &mut state);
+
+        // スコア計算
+        let threshold =
+            threshold_generator.next(current_score.annealing_score(progress), temperature);
+        let Some(new_score) = neighbor.eval(env, &state, progress, threshold) else {
+            // 明らかに閾値に届かない場合はreject
+            neighbor.rollback(env, &mut state);
+            continue;
+        };
+
+        if new_score.annealing_score(progress) >= threshold {
+            stats.accept(neighbor_index);
+            current_score = new_score;
+            neighbor.postprocess(env, &mut state);
+
+            let new_score = current_score.annealing_score(1.0);
+
+            if best_score < new_score {
+                best_score = new_score;
+                best_state = state.clone();
+                stats.updated_count += 1;
+            }
+        } else {
+            neighbor.rollback(env, &mut state);
+        }
     }
+
+    stats.final_score = best_state.score(&env).raw_score();
+
+    (best_state, stats)
 }
 
 /// 焼きなましにおける評価関数の打ち切り基準となる次の閾値を返す構造体
@@ -477,6 +472,8 @@ mod test {
     use itertools::Itertools;
     use rand::Rng;
     use std::time::Duration;
+
+    use crate::annealing::run_annealing;
 
     #[derive(Debug, Clone)]
     struct Input {
@@ -644,10 +641,11 @@ mod test {
         }
     }
 
+    // 近傍セットを表すenumの生成
     crate::neighbors! {
         Neighbors, Input, State, [
             NoOp => 1.0,
-            TwoOpt => 10.0,
+            TwoOpt => 2.0,
         ]
     }
 
@@ -655,9 +653,15 @@ mod test {
     fn annealing_tsp_test() {
         let input = Input::gen_testcase();
         let state = State::new(&input);
-        let annealer = super::Annealer::<Neighbors, 1024>::new(1e1, 1e-1, 42);
 
-        let (state, diagnostics) = annealer.run(&input, state, Duration::from_millis(100));
+        let (state, diagnostics) = run_annealing::<Neighbors, 1024>(
+            &input,
+            state,
+            1e1,
+            1e-1,
+            Duration::from_millis(100),
+            42,
+        );
 
         eprintln!("{}", diagnostics);
 
