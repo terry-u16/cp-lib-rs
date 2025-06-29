@@ -5,4 +5,5 @@ pub mod graph;
 pub mod grid;
 pub mod modint;
 pub mod numerics;
+pub mod random;
 pub mod util;

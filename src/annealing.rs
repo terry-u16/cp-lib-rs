@@ -469,11 +469,9 @@ impl ThresholdGenerator {
 
 #[cfg(test)]
 mod test {
+    use crate::{annealing::run_annealing, random::RandExtension};
     use itertools::Itertools;
-    use rand::Rng;
     use std::time::Duration;
-
-    use crate::annealing::run_annealing;
 
     #[derive(Debug, Clone)]
     struct Input {
@@ -593,8 +591,9 @@ mod test {
             _progress: f64,
         ) -> Option<Self> {
             loop {
-                let begin = rng.gen_range(1..state.order.len());
-                let end = rng.gen_range(1..state.order.len());
+                let (i, j) = rng.fast_gen_range_u16x2(1..state.order.len(), 1..state.order.len());
+                let begin = i.min(j);
+                let end = i.max(j);
 
                 if begin + 2 <= end {
                     return Some(TwoOpt::new(begin, end));
