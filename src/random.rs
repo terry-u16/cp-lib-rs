@@ -232,3 +232,168 @@ impl<T: PrimInt> BoundedRange<T> for RangeInclusive<T> {
         !(self.start() <= self.end())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+    use std::collections::HashSet;
+
+    fn check_range<R: BoundedRange<usize> + Clone, F: Fn(&mut StdRng, R) -> usize>(
+        range: R,
+        gen: F,
+    ) {
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut values = HashSet::new();
+        let start = range.start();
+        let width = range.width();
+        let end = start + width;
+
+        for _ in 0..10000 {
+            let v = gen(&mut rng, range.clone());
+            assert!(start <= v && v < end, "value {:?} out of range", v);
+            values.insert(v);
+        }
+
+        for v in start..end {
+            assert!(values.contains(&v), "value {:?} not generated", v);
+        }
+    }
+
+    #[test]
+    fn test_fast_gen_range_u64x1() {
+        check_range(0usize..10usize, |rng, r| rng.fast_gen_range_u64x1(r));
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot sample empty range")]
+    fn test_fast_gen_range_u64x1_empty_range() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let _ = rng.fast_gen_range_u64x1(5usize..5usize);
+    }
+
+    #[test]
+    fn test_fast_gen_range_u32x1() {
+        check_range(0usize..10usize, |rng, r| rng.fast_gen_range_u32x1(r));
+    }
+
+    #[test]
+    fn test_fast_gen_range_u32x2() {
+        let mut rng = StdRng::seed_from_u64(123);
+        let mut set0 = HashSet::new();
+        let mut set1 = HashSet::new();
+
+        for _ in 0..10000 {
+            let (v0, v1) = rng.fast_gen_range_u32x2(0u32..5u32, 10u32..=15u32);
+            assert!((0..5).contains(&v0));
+            assert!((10..=15).contains(&v1));
+            set0.insert(v0);
+            set1.insert(v1);
+        }
+
+        for v in 0u32..5u32 {
+            assert!(set0.contains(&v));
+        }
+
+        for v in 10u32..=15u32 {
+            assert!(set1.contains(&v));
+        }
+    }
+
+    #[test]
+    fn test_fast_gen_range_u16x1() {
+        check_range(0usize..10usize, |rng, r| rng.fast_gen_range_u16x1(r));
+    }
+
+    #[test]
+    fn test_fast_gen_range_u16x2() {
+        let mut rng = StdRng::seed_from_u64(456);
+        let mut set0 = HashSet::new();
+        let mut set1 = HashSet::new();
+
+        for _ in 0..10000 {
+            let (v0, v1) = rng.fast_gen_range_u16x2(0u16..5u16, 10u16..15u16);
+            assert!((0..5).contains(&v0));
+            assert!((10..15).contains(&v1));
+            set0.insert(v0);
+            set1.insert(v1);
+        }
+
+        for v in 0u16..5u16 {
+            assert!(set0.contains(&v));
+        }
+
+        for v in 10u16..15u16 {
+            assert!(set1.contains(&v));
+        }
+    }
+
+    #[test]
+    fn test_fast_gen_range_u16x3() {
+        let mut rng = StdRng::seed_from_u64(789);
+        let mut set0 = HashSet::new();
+        let mut set1 = HashSet::new();
+        let mut set2 = HashSet::new();
+
+        for _ in 0..10000 {
+            let (v0, v1, v2) = rng.fast_gen_range_u16x3(0u16..3u16, 10u16..13u16, 20u16..=23u16);
+            assert!((0..3).contains(&v0));
+            assert!((10..13).contains(&v1));
+            assert!((20..=23).contains(&v2));
+            set0.insert(v0);
+            set1.insert(v1);
+            set2.insert(v2);
+        }
+
+        for v in 0u16..3u16 {
+            assert!(set0.contains(&v));
+        }
+
+        for v in 10u16..13u16 {
+            assert!(set1.contains(&v));
+        }
+
+        for v in 20u16..=23u16 {
+            assert!(set2.contains(&v));
+        }
+    }
+
+    #[test]
+    fn test_fast_gen_range_u16x4() {
+        let mut rng = StdRng::seed_from_u64(321);
+        let mut set0 = HashSet::new();
+        let mut set1 = HashSet::new();
+        let mut set2 = HashSet::new();
+        let mut set3 = HashSet::new();
+
+        for _ in 0..10000 {
+            let (v0, v1, v2, v3) =
+                rng.fast_gen_range_u16x4(0u16..2u16, 10u16..12u16, 20u16..=22u16, 30u16..32u16);
+            assert!((0..2).contains(&v0));
+            assert!((10..12).contains(&v1));
+            assert!((20..=22).contains(&v2));
+            assert!((30..32).contains(&v3));
+            set0.insert(v0);
+            set1.insert(v1);
+            set2.insert(v2);
+            set3.insert(v3);
+        }
+
+        for v in 0u16..2u16 {
+            assert!(set0.contains(&v));
+        }
+
+        for v in 10u16..12u16 {
+            assert!(set1.contains(&v));
+        }
+
+        for v in 20u16..=22u16 {
+            assert!(set2.contains(&v));
+        }
+
+        for v in 30u16..32u16 {
+            assert!(set3.contains(&v));
+        }
+    }
+}
