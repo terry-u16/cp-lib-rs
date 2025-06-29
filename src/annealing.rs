@@ -98,7 +98,7 @@ pub trait NeighborEnum: Sized {
     type Env;
     type State: State<Env = Self::Env>;
 
-    fn get_neighbor_weights() -> &'static [f64];
+    fn get_neighbor_weights() -> Vec<f64>;
 
     fn get_neighbor_names() -> &'static [&'static str];
 
@@ -128,7 +128,8 @@ pub trait NeighborEnum: Sized {
 /// 近傍をまとめたenumを生成するマクロ
 ///
 /// `enum_name` は生成するenumの名前、`env` は環境の型、`state` は状態の型を指定する。
-/// 各近傍は `variant => weight` の形式で指定する。`weight` はその近傍が選ばれる確率の重みを表す。
+/// 各近傍は `variant => weight` の形式で指定する。
+/// `weight` はその近傍が選ばれる確率の重みを表す。焼きなまし実行時に遅延評価されるため、`weight` は定数である必要はない。
 ///
 /// # Usage
 ///
@@ -179,18 +180,20 @@ macro_rules! neighbors {
         }
 
         impl $enum_name {
-            const WEIGHTS: &'static [f64] = &[$($weight, )+];
+            thread_local!(static WEIGHTS: std::cell::RefCell<Vec<Box<dyn FnMut() -> f64>>> = std::cell::RefCell::new(vec![$(Box::new(|| $weight), )+]));
             const NAMES: &'static [&'static str] = &[$(stringify!($variant), )+];
         }
-
 
         impl crate::annealing::NeighborEnum for $enum_name
         {
             type Env = $env;
             type State = $state;
 
-            fn get_neighbor_weights() -> &'static [f64] {
-                Self::WEIGHTS
+            fn get_neighbor_weights() -> Vec<f64> {
+                // 重みの設定を遅延させる
+                Self::WEIGHTS.with(|weights| {
+                    weights.borrow_mut().iter_mut().map(|f| f()).collect()
+                })
             }
 
             fn get_neighbor_names() -> &'static [&'static str] {
@@ -360,7 +363,7 @@ pub fn run_annealing<N: NeighborEnum, const I: usize>(
 
     let mut stats = AnnealingStatistics::new(current_score.raw_score());
     let mut rng = AnnealingRng::new(seed);
-    let neighbor_weights = WeightedAliasIndex::new(N::get_neighbor_weights().to_vec())
+    let neighbor_weights = WeightedAliasIndex::new(N::get_neighbor_weights())
         .expect("weights must be non-negative and not all zero");
     let threshold_generator = ThresholdGenerator::get_singleton();
     let mut threshold_generator = threshold_generator.borrow_mut();
