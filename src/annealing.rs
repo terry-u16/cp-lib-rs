@@ -142,7 +142,7 @@ pub trait NeighborEnum: Sized {
 ///     ]
 /// }
 ///
-/// let (state, stats) = run_annealing::<Neighbors, 128>(&input, state, 1e1, 1e-1, Duration::from_millis(1000), 42);
+/// let (state, stats) = run_annealing::<Neighbors, SimdSelector, 128>(&input, state, 1e1, 1e-1, Duration::from_millis(1000), 42);
 /// ```
 #[macro_export]
 macro_rules! neighbors {
@@ -265,6 +265,90 @@ macro_rules! neighbors {
     };
 }
 
+/// 近傍選択のためのトレイト
+pub trait NeighborSelector {
+    fn new(weights: Vec<f64>) -> Self;
+    fn select(&self, rng: &mut AnnealingRng) -> usize;
+}
+
+/// WeightedAliasを使用した近傍選択
+pub struct WeightedAliasSelector {
+    alias: WeightedAliasIndex<f64>,
+}
+
+impl NeighborSelector for WeightedAliasSelector {
+    fn new(weights: Vec<f64>) -> Self {
+        let alias = WeightedAliasIndex::new(weights)
+            .expect("weights must be non-negative and not all zero");
+        Self { alias }
+    }
+
+    fn select(&self, rng: &mut AnnealingRng) -> usize {
+        self.alias.sample(rng)
+    }
+}
+
+/// SIMD命令を使用した近傍選択
+///
+/// 候補となる近傍は8個までという制限があるが高速
+pub struct SimdSelector {
+    prefix_sum: std::arch::x86_64::__m256,
+}
+
+impl SimdSelector {
+    #[target_feature(enable = "bmi1,avx")]
+    unsafe fn select_simd(&self, rng: &mut AnnealingRng) -> usize {
+        unsafe {
+            // SIMD命令を使用して、重みの中からランダムな値以上の最初のインデックスを選択する
+            // 8要素同時に比較してからtrue/falseのビットを取得し、tzcntで最初のtrueのインデックスを返す
+            let x = rng.gen::<f32>();
+            let x = std::arch::x86_64::_mm256_set1_ps(x);
+            let cmp =
+                std::arch::x86_64::_mm256_cmp_ps(self.prefix_sum, x, std::arch::x86_64::_CMP_GE_OQ);
+            let flag = std::arch::x86_64::_mm256_movemask_ps(cmp);
+            let index = std::arch::x86_64::_tzcnt_u32(flag as u32) as usize;
+            index
+        }
+    }
+}
+
+impl NeighborSelector for SimdSelector {
+    fn new(weights: Vec<f64>) -> Self {
+        assert!(weights.len() > 0, "Weights must not be empty");
+        assert!(
+            weights.len() <= 8,
+            "SimdSelector requires weights of length 8 or less"
+        );
+        assert!(
+            weights.iter().all(|&w| w >= 0.0),
+            "Weights must be non-negative"
+        );
+
+        let mut prefix_sum = [0.0; 8];
+        for i in 0..weights.len() {
+            prefix_sum[i] = weights[i] as f32;
+        }
+
+        for i in 1..prefix_sum.len() {
+            prefix_sum[i] += prefix_sum[i - 1];
+        }
+
+        let sum = prefix_sum[7];
+        assert!(sum > 0.0, "Weights must not all be zero");
+
+        for i in 0..prefix_sum.len() {
+            prefix_sum[i] /= sum; // 正規化
+        }
+
+        let prefix_sum = unsafe { std::arch::x86_64::_mm256_loadu_ps(prefix_sum.as_ptr()) };
+        Self { prefix_sum }
+    }
+
+    fn select(&self, rng: &mut AnnealingRng) -> usize {
+        unsafe { self.select_simd(rng) }
+    }
+}
+
 /// 焼きなましの統計データ
 #[derive(Debug, Clone)]
 pub struct AnnealingStatistics<N: NeighborEnum> {
@@ -347,9 +431,9 @@ impl<N: NeighborEnum> Display for AnnealingStatistics<N> {
 ///     ]
 /// }
 ///
-/// let (state, stats) = run_annealing::<Neighbors, 128>(&input, state, 1e1, 1e-1, Duration::from_millis(1000), 42);
+/// let (state, stats) = run_annealing::<Neighbors, SimdSelector, 128>(&input, state, 1e1, 1e-1, Duration::from_millis(1000), 42);
 /// ```
-pub fn run_annealing<N: NeighborEnum, const I: usize>(
+pub fn run_annealing<N: NeighborEnum, S: NeighborSelector, const I: usize>(
     env: &N::Env,
     mut state: N::State,
     start_temp: f64,
@@ -363,8 +447,7 @@ pub fn run_annealing<N: NeighborEnum, const I: usize>(
 
     let mut stats = AnnealingStatistics::new(current_score.raw_score());
     let mut rng = AnnealingRng::new(seed);
-    let neighbor_weights = WeightedAliasIndex::new(N::get_neighbor_weights())
-        .expect("weights must be non-negative and not all zero");
+    let neighbor_selector = S::new(N::get_neighbor_weights());
     let threshold_generator = ThresholdGenerator::get_singleton();
     let mut threshold_generator = threshold_generator.borrow_mut();
     threshold_generator.set_pos(rng.gen());
@@ -388,7 +471,7 @@ pub fn run_annealing<N: NeighborEnum, const I: usize>(
         stats.all_iter += 1;
 
         // 変形
-        let neighbor_index = neighbor_weights.sample(&mut rng);
+        let neighbor_index = neighbor_selector.select(&mut rng);
         let Some(mut neighbor) = N::generate(env, &state, &mut rng, progress, neighbor_index)
         else {
             continue;
@@ -472,7 +555,10 @@ impl ThresholdGenerator {
 
 #[cfg(test)]
 mod test {
-    use crate::{annealing::run_annealing, random::RandExtension};
+    use crate::{
+        annealing::{run_annealing, SimdSelector},
+        random::RandExtension,
+    };
     use itertools::Itertools;
     use std::time::Duration;
 
@@ -656,7 +742,7 @@ mod test {
         let input = Input::gen_testcase();
         let state = State::new(&input);
 
-        let (state, diagnostics) = run_annealing::<Neighbors, 1024>(
+        let (state, diagnostics) = run_annealing::<Neighbors, SimdSelector, 1024>(
             &input,
             state,
             1e1,
