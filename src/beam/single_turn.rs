@@ -1,13 +1,14 @@
 //! オイラーツアーの辺を保持するビームサーチ
 //!
 //! 1ターン先にしか遷移できない代わりに高速
-use super::common::{
-    BeamError, BeamWidthSuggester, Entry, MaxCostIndex, NoCandidatesError, OpenHashMap,
-};
+use super::common::{BeamError, BeamWidthSuggester, MaxCostIndex, NoCandidatesError};
 use ac_library::Segtree;
 use num_traits::bounds::LowerBounded;
+use rustc_hash::FxHashMap;
 use std::{
+    collections::hash_map::Entry,
     fmt::{Debug, Display},
+    hash::Hash,
     marker::PhantomData,
     time::Instant,
     usize,
@@ -26,12 +27,12 @@ pub trait Action: Clone + Eq {
 /// 状態のコストを評価するための構造体
 /// メモリ使用量をできるだけ小さくしてください
 pub trait Evaluator: Clone {
-    type Cost: Copy + PartialOrd + LowerBounded + Default + Display;
+    type Cost: Copy + Ord + LowerBounded + Default + Display;
 
     fn evaluate(&self) -> Self::Cost;
 }
 
-pub trait BeamHash: Debug + Copy + Eq + Into<u64> {}
+pub trait BeamHash: Copy + Eq + Hash {}
 impl BeamHash for u8 {}
 impl BeamHash for u16 {}
 impl BeamHash for u32 {}
@@ -111,13 +112,13 @@ pub trait CandidateSet {
     );
 }
 
-struct CandidateSetImpl<'a, A: Action, E: Evaluator, H: BeamHash, const N: usize> {
-    selector: &'a mut NodeSelector<A, E, H, N>,
+struct CandidateSetImpl<'a, A: Action, E: Evaluator, H: BeamHash> {
+    selector: &'a mut NodeSelector<A, E, H>,
     parent_id: ParentId,
 }
 
-impl<'a, A: Action, E: Evaluator, H: BeamHash, const N: usize> CandidateSetImpl<'a, A, E, H, N> {
-    fn new(selector: &'a mut NodeSelector<A, E, H, N>, parent_id: ParentId) -> Self {
+impl<'a, A: Action, E: Evaluator, H: BeamHash> CandidateSetImpl<'a, A, E, H> {
+    fn new(selector: &'a mut NodeSelector<A, E, H>, parent_id: ParentId) -> Self {
         Self {
             selector,
             parent_id,
@@ -125,9 +126,7 @@ impl<'a, A: Action, E: Evaluator, H: BeamHash, const N: usize> CandidateSetImpl<
     }
 }
 
-impl<'a, A: Action, E: Evaluator, H: BeamHash, const N: usize> CandidateSet
-    for CandidateSetImpl<'a, A, E, H, N>
-{
+impl<'a, A: Action, E: Evaluator, H: BeamHash> CandidateSet for CandidateSetImpl<'a, A, E, H> {
     type Action = A;
     type Evaluator = E;
     type Hash = H;
@@ -150,17 +149,17 @@ impl<'a, A: Action, E: Evaluator, H: BeamHash, const N: usize> CandidateSet
 /// ノードの候補から実際に追加するものを選ぶ構造体
 /// ビーム幅の個数だけ、評価がよいものを選ぶ
 /// ハッシュ値が一致したものについては、評価がよいほうのみを残す
-struct NodeSelector<A: Action, E: Evaluator, H: BeamHash, const N: usize> {
+struct NodeSelector<A: Action, E: Evaluator, H: BeamHash> {
     beam_width: usize,
     candidates: Vec<Candidate<A, E, H>>,
-    hash_to_index: OpenHashMap<H, usize, N>,
+    hash_to_index: FxHashMap<H, usize>,
     costs: Vec<(E::Cost, usize)>,
     /// セグメント木を削除可能な優先度付きキューとして使う
     cost_segtree: Option<Segtree<MaxCostIndex<E::Cost>>>,
     finished_candidates: Vec<Candidate<A, E, H>>,
 }
 
-impl<A: Action, E: Evaluator, H: BeamHash, const N: usize> NodeSelector<A, E, H, N> {
+impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
     fn new(max_beam_width: usize) -> Self {
         let candidates = Vec::with_capacity(max_beam_width);
         let costs = Vec::with_capacity(max_beam_width);
@@ -168,7 +167,7 @@ impl<A: Action, E: Evaluator, H: BeamHash, const N: usize> NodeSelector<A, E, H,
         Self {
             beam_width: max_beam_width,
             candidates,
-            hash_to_index: OpenHashMap::new(),
+            hash_to_index: FxHashMap::default(),
             costs,
             cost_segtree: None,
             finished_candidates: Vec::new(),
@@ -190,59 +189,58 @@ impl<A: Action, E: Evaluator, H: BeamHash, const N: usize> NodeSelector<A, E, H,
             }
         }
 
-        // ハッシュ値が等しいものが存在している場合
-        let hash_entry = self.hash_to_index.get_index(candidate.hash);
+        match self.hash_to_index.entry(candidate.hash) {
+            // ハッシュ値が等しいものが存在している場合
+            Entry::Occupied(entry) => {
+                let index_c = *entry.get();
+                let old_cand = &self.candidates[index_c];
 
-        if let Entry::Occupied(index_h) = hash_entry {
-            let index_c = *self.hash_to_index.get(index_h);
-            let old_cand = &self.candidates[index_c];
+                // 同じハッシュの状態は1つしか保持しないため、その場合は上書き処理となる
+                if candidate.hash == old_cand.hash {
+                    // セグ木が構築されているかどうかで場合分け
+                    match &mut self.cost_segtree {
+                        Some(segtree) => {
+                            if cost < segtree.get(index_c).0 {
+                                self.candidates[index_c] = candidate;
+                                segtree.set(index_c, (cost, index_c));
+                            }
+                        }
+                        None => {
+                            if cost < self.costs[index_c].0 {
+                                self.candidates[index_c] = candidate;
+                                self.costs[index_c] = (cost, index_c);
+                            }
+                        }
+                    }
 
-            // 同じハッシュの状態は1つしか保持しないため、その場合は上書き処理となる
-            if candidate.hash == old_cand.hash {
-                // セグ木が構築されているかどうかで場合分け
+                    return;
+                }
+            }
+            // ハッシュ値が等しいものが存在していない場合
+            Entry::Vacant(vacant_entry) => {
+                // セグ木が構築されているかで場合分け
                 match &mut self.cost_segtree {
                     Some(segtree) => {
-                        if cost < segtree.get(index_c).0 {
-                            self.candidates[index_c] = candidate;
-                            segtree.set(index_c, (cost, index_c));
-                        }
+                        let index_c = segtree.all_prod().1;
+                        vacant_entry.insert(index_c);
+                        self.candidates[index_c] = candidate;
+                        segtree.set(index_c, (cost, index_c));
                     }
                     None => {
-                        if cost < self.costs[index_c].0 {
-                            self.candidates[index_c] = candidate;
-                            self.costs[index_c] = (cost, index_c);
+                        let index_c = self.candidates.len();
+                        vacant_entry.insert(index_c);
+                        self.candidates.push(candidate);
+                        self.costs.push((cost, index_c));
+
+                        // 保持している候補がビーム幅分になったときにセグ木を構築する
+                        if self.candidates.len() >= self.beam_width {
+                            // ビーム幅の変動に備え、少し多めに確保
+                            let mut costs = Vec::with_capacity(self.beam_width * 12 / 10);
+                            std::mem::swap(&mut self.costs, &mut costs);
+                            let segtree = Segtree::from(costs);
+                            self.cost_segtree = Some(segtree);
                         }
                     }
-                }
-
-                return;
-            }
-        }
-
-        // ハッシュ値が等しいものが存在しない場合
-        let index_h = hash_entry.index();
-
-        // セグ木が構築されているかで場合分け
-        match &mut self.cost_segtree {
-            Some(segtree) => {
-                let index_c = segtree.all_prod().1;
-                self.hash_to_index.set(index_h, candidate.hash, index_c);
-                self.candidates[index_c] = candidate;
-                segtree.set(index_c, (cost, index_c));
-            }
-            None => {
-                let index_c = self.candidates.len();
-                self.hash_to_index.set(index_h, candidate.hash, index_c);
-                self.candidates.push(candidate);
-                self.costs.push((cost, index_c));
-
-                // 保持している候補がビーム幅分になったときにセグ木を構築する
-                if self.candidates.len() >= self.beam_width {
-                    // ビーム幅の変動に備え、少し多めに確保
-                    let mut costs = Vec::with_capacity(self.beam_width * 12 / 10);
-                    std::mem::swap(&mut self.costs, &mut costs);
-                    let segtree = Segtree::from(costs);
-                    self.cost_segtree = Some(segtree);
                 }
             }
         }
@@ -299,7 +297,7 @@ impl<A: Action, E: Evaluator, H: BeamHash, const N: usize> NodeSelector<A, E, H,
     }
 }
 
-struct BeamTree<E: Evaluator, H: BeamHash, S: State, A: Action, const N: usize> {
+struct BeamTree<E: Evaluator, H: BeamHash, S: State, A: Action> {
     state: S,
     current_tour: Vec<(TourStep, A)>,
     next_tour: Vec<(TourStep, A)>,
@@ -313,8 +311,7 @@ impl<
         H: BeamHash,
         S: State<Evaluator = E, Hash = H, Action = A>,
         A: Action<State = S>,
-        const N: usize,
-    > BeamTree<E, H, S, A, N>
+    > BeamTree<E, H, S, A>
 {
     fn new(state: S, max_beam_width: usize) -> Self {
         Self {
@@ -328,7 +325,7 @@ impl<
     }
 
     /// 状態を更新しながら深さ優先探索を行い、次のノードの候補を全てselectorに追加する
-    fn dfs(&mut self, selector: &mut NodeSelector<A, E, H, N>) {
+    fn dfs(&mut self, selector: &mut NodeSelector<A, E, H>) {
         if self.current_tour.is_empty() {
             // 最初のターン
             let (evaluator, hash) = self.state.make_initial_node();
@@ -492,16 +489,12 @@ impl TourStep {
 /// - `BeamHash`: ビームサーチのためのハッシュ値を計算するための構造体
 /// - `Action`: 状態遷移を行うためのアクションを表す構造体
 /// - `BeamWidthSuggester`: ビーム幅を提案するための構造体（Optional）
-///
-/// # Type Parameters
-///
-/// - `N`: 内部的に使う連想配列のサイズ。格納する要素数（>ビーム幅）の16倍程度の素数を推奨
-pub struct BeamSearch<W: BeamWidthSuggester, const N: usize> {
+pub struct BeamSearch<W: BeamWidthSuggester> {
     beam_width_suggester: W,
     max_turn: usize,
 }
 
-impl<W: BeamWidthSuggester, const N: usize> BeamSearch<W, N> {
+impl<W: BeamWidthSuggester> BeamSearch<W> {
     pub fn new(beam_width_suggester: W, max_turn: usize) -> Self {
         assert!(max_turn > 0, "Max turn must be greater than 0.");
 
@@ -526,7 +519,7 @@ impl<W: BeamWidthSuggester, const N: usize> BeamSearch<W, N> {
         state: S,
         mut callbacks: Vec<Box<dyn BeamCallback<State = S> + 'a>>,
     ) -> Result<Vec<S::Action>, BeamError> {
-        let mut tree = BeamTree::<_, _, _, _, N>::new(state, self.beam_width_suggester.max_width());
+        let mut tree = BeamTree::new(state, self.beam_width_suggester.max_width());
         let mut selector = NodeSelector::new(self.beam_width_suggester.max_width());
 
         for turn in 0..self.max_turn {
@@ -548,14 +541,11 @@ impl<W: BeamWidthSuggester, const N: usize> BeamSearch<W, N> {
             }
 
             // ターン数最小化型の問題で実行可能解が見つかったとき
-            let finished_min = selector.finished_candidates.iter().min_by(|c1, c2| {
-                c1.evaluator
-                    .evaluate()
-                    .partial_cmp(&c2.evaluator.evaluate())
-                    .unwrap()
-            });
-
-            if let Some(cand) = finished_min {
+            if let Some(cand) = selector
+                .finished_candidates
+                .iter()
+                .min_by_key(|c| c.evaluator.evaluate())
+            {
                 let mut actions = tree.restore_path(cand.parent_id);
                 actions.push(cand.action.clone());
                 return Ok(actions);
