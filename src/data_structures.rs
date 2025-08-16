@@ -276,6 +276,370 @@ impl<T: Ord> Index<usize> for Compressor<T> {
     }
 }
 
+/// ウェーブレット行列
+#[derive(Clone)]
+pub struct WaveletMatrix {
+    n: usize,
+    max_log: usize,        // number of bit levels (e.g., up to 64 for u64)
+    bitmaps: Vec<BitRank>, // per level bitmap of '1's
+    mids: Vec<usize>,      // per level, number of zeros (split point)
+}
+
+impl WaveletMatrix {
+    /// Build from data. O(Nlogσ)
+    pub fn new<I, T>(data: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<u64>,
+    {
+        let data: Vec<u64> = data.into_iter().map(|x| x.into()).collect_vec();
+        let n = data.len();
+        let maxv = data.iter().copied().max().unwrap_or(0);
+        let computed_log = 64usize.saturating_sub(maxv.leading_zeros() as usize).max(1);
+        let max_log = computed_log;
+
+        let mut bitmaps = Vec::with_capacity(max_log);
+        let mut mids = vec![0usize; max_log];
+
+        let mut cur = data;
+
+        // process from high bit to low bit
+        for level in (0..max_log).rev() {
+            let mut bits = vec![false; n];
+            for (i, &v) in cur.iter().enumerate() {
+                bits[i] = ((v >> level) & 1) == 1;
+            }
+            let br = BitRank::from_bools(&bits);
+
+            // stable partition by bit (0 then 1)
+            let mut zeros = Vec::with_capacity(n);
+            let mut ones = Vec::with_capacity(n);
+            for (i, &v) in cur.iter().enumerate() {
+                if !bits[i] {
+                    zeros.push(v);
+                } else {
+                    ones.push(v);
+                }
+            }
+            let mid = zeros.len();
+            mids[level] = mid;
+
+            zeros.extend(ones);
+            cur = zeros;
+            bitmaps.push(br);
+        }
+
+        // bitmaps were pushed from high->low level; keep that order (same indexing).
+        Self {
+            n,
+            max_log,
+            bitmaps,
+            mids,
+        }
+    }
+
+    /// Access: return value at index idx. O(logσ)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cp_lib_rs::data_structures::WaveletMatrix;
+    ///
+    /// let a = vec![5u64, 1, 7, 3, 3, 9, 0, 6];
+    /// let wm = WaveletMatrix::new(a.clone());
+    ///
+    /// for i in 0..a.len() {
+    ///     assert_eq!(wm.access(i), a[i]);
+    /// }
+    /// ```
+    pub fn access(&self, mut idx: usize) -> u64 {
+        assert!(idx < self.n);
+        let mut val = 0u64;
+        for level in (0..self.max_log).rev() {
+            let br = &self.bitmaps[self.max_log - 1 - level];
+            let is_one = br.get(idx);
+            if is_one {
+                val |= 1u64 << level;
+                let r1 = br.rank1(idx);
+                idx = self.mids[level] + r1;
+            } else {
+                let r1 = br.rank1(idx);
+                idx = idx - r1;
+            }
+        }
+        val
+    }
+
+    /// Count occurrences of 'value' in [l, r). O(logσ)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cp_lib_rs::data_structures::WaveletMatrix;
+    ///
+    /// let a = vec![5u64, 1, 7, 3, 3, 9, 0, 6];
+    /// let wm = WaveletMatrix::new(a.clone());
+    ///
+    /// assert_eq!(wm.rank(.., 3), 2);
+    /// assert_eq!(wm.rank(2..6, 3), 2);
+    /// assert_eq!(wm.rank(.., 10), 0);
+    /// ```
+    pub fn rank(&self, range: impl RangeBounds<usize>, value: u64) -> usize {
+        let (mut l, mut r) = self.bounds_to_lr(range);
+
+        assert!(l <= r && r <= self.n);
+        for level in (0..self.max_log).rev() {
+            let br = &self.bitmaps[self.max_log - 1 - level];
+            let bit = ((value >> level) & 1) != 0;
+            if bit {
+                let l1 = br.rank1(l);
+                let r1 = br.rank1(r);
+                l = self.mids[level] + l1;
+                r = self.mids[level] + r1;
+            } else {
+                let l1 = br.rank1(l);
+                let r1 = br.rank1(r);
+                l = l - l1;
+                r = r - r1;
+            }
+        }
+        r - l
+    }
+
+    /// k-th smallest in [l, r), 0-indexed k. O(logσ)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cp_lib_rs::data_structures::WaveletMatrix;
+    ///
+    /// let a = vec![5u64, 1, 7, 3, 3, 9, 0, 6];
+    /// let wm = WaveletMatrix::new(a.clone());
+    ///
+    /// // [l,r) = [0,8): sorted => [0, 1, 3, 3, 5, 6, 7, 9]
+    /// assert_eq!(wm.kth(.., 0), 0);
+    /// assert_eq!(wm.kth(.., 1), 1);
+    /// assert_eq!(wm.kth(.., 2), 3);
+    /// assert_eq!(wm.kth(.., 3), 3);
+    /// assert_eq!(wm.kth(.., 4), 5);
+    /// assert_eq!(wm.kth(.., 5), 6);
+    /// assert_eq!(wm.kth(.., 6), 7);
+    /// assert_eq!(wm.kth(.., 7), 9);
+    ///
+    /// // [2,7) = [7, 3, 3, 9, 0] sorted => [0, 3, 3, 7, 9]
+    /// assert_eq!(wm.kth(2..7, 0), 0);
+    /// assert_eq!(wm.kth(2..7, 1), 3);
+    /// assert_eq!(wm.kth(2..7, 2), 3);
+    /// assert_eq!(wm.kth(2..7, 3), 7);
+    /// assert_eq!(wm.kth(2..7, 4), 9);
+    /// ```
+    pub fn kth(&self, range: impl RangeBounds<usize>, mut k: usize) -> u64 {
+        let (mut l, mut r) = self.bounds_to_lr(range);
+        assert!(k < r - l);
+
+        let mut val = 0u64;
+        for level in (0..self.max_log).rev() {
+            let br = &self.bitmaps[self.max_log - 1 - level];
+            let l1 = br.rank1(l);
+            let r1 = br.rank1(r);
+            let zeros = (r - l) - (r1 - l1);
+            if k < zeros {
+                // go to 0-side
+                l = l - l1;
+                r = r - r1;
+            } else {
+                // go to 1-side
+                k -= zeros;
+                val |= 1u64 << level;
+                l = self.mids[level] + l1;
+                r = self.mids[level] + r1;
+            }
+        }
+        val
+    }
+
+    /// number of x in [l, r) with lower <= x < upper. O(logσ)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cp_lib_rs::data_structures::WaveletMatrix;
+    ///
+    /// let a = vec![5u64, 1, 7, 3, 3, 9, 0, 6];
+    /// let wm = WaveletMatrix::new(a.clone());
+    ///
+    ///
+    /// // range_freq: in [0,8) count in [3,7)  => [3, 3, 5, 6] => 4
+    /// assert_eq!(wm.range_freq(0..8, 3u64, 7u64), 4);
+    ///
+    /// // [2,7) = [7, 3, 3, 9, 0] sorted => [0, 3, 3, 7, 9]
+    /// assert_eq!(wm.range_freq(2..7, 3u64, 8u64), 3);
+    /// ```
+    pub fn range_freq(
+        &self,
+        range: impl RangeBounds<usize> + Clone,
+        lower: impl Into<u64>,
+        upper: impl Into<u64>,
+    ) -> usize {
+        let lower = lower.into();
+        let upper = upper.into();
+
+        if lower >= upper {
+            return 0;
+        }
+
+        self.freq_lt(range.clone(), upper) - self.freq_lt(range, lower)
+    }
+
+    /// count x in [l, r) with x < upper
+    fn freq_lt(&self, range: impl RangeBounds<usize>, upper: impl Into<u64>) -> usize {
+        let upper = upper.into();
+
+        let (mut l, mut r) = self.bounds_to_lr(range);
+        if l == r {
+            return 0;
+        }
+        let mut cnt = 0usize;
+        for level in (0..self.max_log).rev() {
+            let br = &self.bitmaps[self.max_log - 1 - level];
+            let l1 = br.rank1(l);
+            let r1 = br.rank1(r);
+            let zeros = (r - l) - (r1 - l1);
+            let bit = ((upper >> level) & 1) != 0;
+
+            if bit {
+                // all zeros go in (they are < upper at this bit)
+                cnt += zeros;
+                // proceed to ones range
+                l = self.mids[level] + l1;
+                r = self.mids[level] + r1;
+            } else {
+                // stay in zeros
+                l = l - l1;
+                r = r - r1;
+            }
+        }
+        cnt
+    }
+
+    #[inline]
+    fn bounds_to_lr<R: RangeBounds<usize>>(&self, range: R) -> (usize, usize) {
+        use Bound::*;
+
+        let l = match range.start_bound() {
+            Unbounded => 0,
+            Included(&x) => x,
+            Excluded(&x) => x.saturating_add(1),
+        };
+        let r = match range.end_bound() {
+            Unbounded => self.n,
+            Included(&x) => x.saturating_add(1),
+            Excluded(&x) => x,
+        };
+
+        assert!(l <= r, "range start must be <= end");
+        assert!(r <= self.n, "range end must be <= len");
+        (l, r)
+    }
+}
+
+#[derive(Clone)]
+struct BitRank {
+    n: usize,
+    words: Vec<u64>,
+    // prefix_pop[i] = popcount of words[0..i)
+    prefix_pop: Vec<u32>,
+}
+
+impl BitRank {
+    fn from_bools(bits: &[bool]) -> Self {
+        let n = bits.len();
+        let w = (n + 63) >> 6;
+        let mut words = vec![0u64; w];
+        for (i, &b) in bits.iter().enumerate() {
+            if b {
+                words[i >> 6] |= 1u64 << (i & 63);
+            }
+        }
+        let mut prefix_pop = Vec::with_capacity(w + 1);
+        prefix_pop.push(0);
+        let mut acc: u32 = 0;
+        for &x in &words {
+            acc += x.count_ones();
+            prefix_pop.push(acc);
+        }
+        Self {
+            n,
+            words,
+            prefix_pop,
+        }
+    }
+
+    #[inline]
+    fn get(&self, i: usize) -> bool {
+        debug_assert!(i < self.n);
+        ((self.words[i >> 6] >> (i & 63)) & 1) != 0
+    }
+
+    // rank1(pos): number of 1s in [0, pos)
+    #[inline]
+    fn rank1(&self, pos: usize) -> usize {
+        let pos = pos.min(self.n);
+        let w = pos >> 6;
+        let m = pos & 63;
+        let mut sum = self.prefix_pop[w] as usize;
+        if m != 0 {
+            let mask = if m == 64 { u64::MAX } else { (1u64 << m) - 1 };
+            sum += (self.words[w] & mask).count_ones() as usize;
+        }
+        sum
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic_ops() {
+        let a = vec![5u64, 1, 7, 3, 3, 9, 0, 6];
+        let wm = WaveletMatrix::new(a.clone());
+
+        // access
+        for i in 0..a.len() {
+            assert_eq!(wm.access(i), a[i] as u64);
+        }
+
+        // rank
+        assert_eq!(wm.rank(.., 3), 2);
+        assert_eq!(wm.rank(2..6, 3), 2);
+        assert_eq!(wm.rank(.., 10), 0);
+
+        // kth (quantile)
+        // [l,r) = [0,8): sorted => [0,1,3,3,5,6,7,9]
+        assert_eq!(wm.kth(0..8, 0), 0);
+        assert_eq!(wm.kth(0..8, 1), 1);
+        assert_eq!(wm.kth(0..8, 2), 3);
+        assert_eq!(wm.kth(0..8, 3), 3);
+        assert_eq!(wm.kth(0..8, 4), 5);
+        assert_eq!(wm.kth(0..8, 5), 6);
+        assert_eq!(wm.kth(0..8, 6), 7);
+        assert_eq!(wm.kth(0..8, 7), 9);
+
+        // range_freq: in [0,8) count in [3,7)  => 3,3,5,6 => 4
+        assert_eq!(wm.range_freq(0..8, 3u64, 7u64), 4);
+
+        // 部分区間でも
+        // [2,7) = [7,3,3,9,0] sorted => [0,3,3,7,9]
+        assert_eq!(wm.kth(2..7, 0), 0);
+        assert_eq!(wm.kth(2..7, 1), 3);
+        assert_eq!(wm.kth(2..7, 2), 3);
+        assert_eq!(wm.kth(2..7, 3), 7);
+        assert_eq!(wm.kth(2..7, 4), 9);
+        assert_eq!(wm.range_freq(2..7, 3u64, 8u64), 3);
+    }
+}
+
 /// ローリングハッシュ
 ///
 /// - 初期化: O(N)
