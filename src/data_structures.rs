@@ -1,6 +1,9 @@
 use ac_library::Monoid;
+use itertools::Itertools;
+use ndarray::indices;
 use rand::prelude::*;
 use rand::thread_rng;
+use std::ops::Index;
 use std::{
     ops::{Bound, RangeBounds},
     slice::Iter,
@@ -191,6 +194,86 @@ fn as_half_open_range(range: impl RangeBounds<usize>, n: usize) -> (usize, usize
     };
 
     (l, r)
+}
+
+/// 座標圧縮を行う構造体
+///
+/// # Examples
+///
+/// ```
+/// use cp_lib_rs::data_structures::Compressor;
+///
+/// let original_values = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+/// let compressor = Compressor::new(original_values.clone());
+/// let expected = vec![2, 0, 3, 0, 4, 6, 1, 5, 4, 2];
+///
+/// assert_eq!(compressor.len(), 10);
+/// assert_eq!(compressor.unique_len(), 7);
+/// assert_eq!(compressor.raw(0), &3);
+/// assert_eq!(compressor[0], 2);
+/// assert_eq!(compressor.originals(), &original_values);
+/// assert_eq!(compressor.as_slice(), expected);
+/// ```
+#[derive(Debug, Clone)]
+pub struct Compressor<T: Ord> {
+    values: Vec<T>,
+    indices: Vec<usize>,
+    unique_len: usize,
+}
+
+impl<T: Ord> Compressor<T> {
+    pub fn new(values: impl IntoIterator<Item = T>) -> Self {
+        let values = values.into_iter().collect_vec();
+        let mut sorted = values.iter().collect_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+
+        let indices = values
+            .iter()
+            .map(|v| sorted.binary_search(&v).unwrap())
+            .collect_vec();
+
+        let unique_len = sorted.len();
+
+        Self {
+            values,
+            indices,
+            unique_len,
+        }
+    }
+
+    /// 圧縮前の値の数を取得する
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// 元の配列を取得する
+    pub fn originals(&self) -> &[T] {
+        &self.values
+    }
+
+    /// 圧縮後の値の数を取得する
+    pub fn unique_len(&self) -> usize {
+        self.unique_len
+    }
+
+    /// 元の配列におけるA[index]を取得する
+    pub fn raw(&self, index: usize) -> &T {
+        &self.values[index]
+    }
+
+    /// 圧縮後の配列におけるA[index]を取得する
+    pub fn as_slice(&self) -> &[usize] {
+        &self.indices
+    }
+}
+
+impl<T: Ord> Index<usize> for Compressor<T> {
+    type Output = usize;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.indices[index]
+    }
 }
 
 /// ローリングハッシュ
