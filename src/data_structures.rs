@@ -1,6 +1,5 @@
 use ac_library::Monoid;
 use itertools::Itertools;
-use ndarray::indices;
 use rand::prelude::*;
 use rand::thread_rng;
 use std::ops::Index;
@@ -278,8 +277,10 @@ impl<T: Ord> Index<usize> for Compressor<T> {
 
 /// ウェーブレット行列
 #[derive(Clone)]
-pub struct WaveletMatrix {
+pub struct WaveletMatrix<T> {
     n: usize,
+    /// 元配列のデータ
+    raw_data: Vec<T>,
     /// number of bit levels (e.g., up to 64 for u64)
     max_log: usize,
     /// per level bitmap of '1's（高ビット→低ビットの順に格納）
@@ -290,17 +291,17 @@ pub struct WaveletMatrix {
     leaf_ids: Vec<usize>,
 }
 
-impl WaveletMatrix {
+impl<T: Clone + Into<u64> + PartialOrd> WaveletMatrix<T> {
     /// Build from data. O(Nlogσ)
     ///
     /// Wavelet Matrixの計算量はデータの最大ビット長に依存する。
     /// 計算量を削減するため、あらかじめ座標圧縮しておくことを推奨。
-    pub fn new<I, T>(data: I) -> Self
+    pub fn new<I>(data: I) -> Self
     where
         I: IntoIterator<Item = T>,
-        T: Into<u64>,
     {
-        let data: Vec<u64> = data.into_iter().map(|x| x.into()).collect_vec();
+        let raw_data = data.into_iter().collect_vec();
+        let data: Vec<u64> = raw_data.iter().cloned().map(|x| x.into()).collect_vec();
         let n = data.len();
         let maxv = data.iter().copied().max().unwrap_or(0);
         let computed_log = 64usize.saturating_sub(maxv.leading_zeros() as usize).max(1);
@@ -355,6 +356,7 @@ impl WaveletMatrix {
         // bitmaps were pushed from high->low level; keep that order (same indexing).
         Self {
             n,
+            raw_data,
             max_log,
             bitmaps,
             mids,
@@ -362,7 +364,9 @@ impl WaveletMatrix {
         }
     }
 
-    /// Access: return value at index idx. O(logσ)
+    /// Access: return value at index idx. O(1)
+    ///
+    /// self\[idx\] と同じ。
     ///
     /// # Examples
     ///
@@ -373,28 +377,11 @@ impl WaveletMatrix {
     /// let wm = WaveletMatrix::new(a.clone());
     ///
     /// for i in 0..a.len() {
-    ///     assert_eq!(wm.access(i), a[i]);
+    ///     assert_eq!(*wm.access(i), a[i]);
     /// }
     /// ```
-    pub fn access(&self, mut idx: usize) -> u64 {
-        assert!(idx < self.n);
-
-        let mut val = 0u64;
-
-        for level in (0..self.max_log).rev() {
-            let br = &self.bitmaps[self.max_log - 1 - level];
-            let is_one = br.get(idx);
-            if is_one {
-                val |= 1u64 << level;
-                let r1 = br.rank1(idx);
-                idx = self.mids[level] + r1;
-            } else {
-                let r1 = br.rank1(idx);
-                idx = idx - r1;
-            }
-        }
-
-        val
+    pub fn access(&self, index: usize) -> &T {
+        &self[index]
     }
 
     /// Count occurrences of 'value' in [l, r). O(logσ)
@@ -411,7 +398,8 @@ impl WaveletMatrix {
     /// assert_eq!(wm.rank(2..6, 3), 2);
     /// assert_eq!(wm.rank(.., 10), 0);
     /// ```
-    pub fn rank(&self, range: impl RangeBounds<usize>, value: u64) -> usize {
+    pub fn rank(&self, range: impl RangeBounds<usize>, value: T) -> usize {
+        let value: u64 = value.into();
         let (mut l, mut r) = self.bounds_to_lr(range);
         assert!(l <= r && r <= self.n);
 
@@ -434,7 +422,9 @@ impl WaveletMatrix {
         r - l
     }
 
-    /// k-th smallest in [l, r), 0-indexed k. O(logσ)
+    /// k-th smallest index in [l, r), 0-indexed k. O(logσ)
+    ///
+    /// 同値が複数ある場合のタイブレークは **元配列での相対順**（安定）
     ///
     /// # Examples
     ///
@@ -444,48 +434,49 @@ impl WaveletMatrix {
     /// let a = vec![5u64, 1, 7, 3, 3, 9, 0, 6];
     /// let wm = WaveletMatrix::new(a.clone());
     ///
-    /// // [l,r) = [0,8): sorted => [0, 1, 3, 3, 5, 6, 7, 9]
-    /// assert_eq!(wm.kth(.., 0), 0);
-    /// assert_eq!(wm.kth(.., 1), 1);
-    /// assert_eq!(wm.kth(.., 2), 3);
-    /// assert_eq!(wm.kth(.., 3), 3);
-    /// assert_eq!(wm.kth(.., 4), 5);
-    /// assert_eq!(wm.kth(.., 5), 6);
-    /// assert_eq!(wm.kth(.., 6), 7);
-    /// assert_eq!(wm.kth(.., 7), 9);
+    /// // 全体: 値でソートしたときの元インデックスは [6, 1, 3, 4, 0, 7, 2, 5]
+    /// assert_eq!(wm.kth(.., 0), 6); // 値=0 の位置
+    /// assert_eq!(wm.kth(.., 1), 1); // 値=1 の位置
+    /// assert_eq!(wm.kth(.., 2), 3); // 値=3（1個目）の位置
+    /// assert_eq!(wm.kth(.., 3), 4); // 値=3（2個目）の位置
+    /// assert_eq!(wm.kth(.., 4), 0); // 値=5 の位置
+    /// assert_eq!(wm.kth(.., 5), 7); // 値=6 の位置
+    /// assert_eq!(wm.kth(.., 6), 2); // 値=7 の位置
+    /// assert_eq!(wm.kth(.., 7), 5); // 値=9 の位置
     ///
-    /// // [2,7) = [7, 3, 3, 9, 0] sorted => [0, 3, 3, 7, 9]
-    /// assert_eq!(wm.kth(2..7, 0), 0);
+    /// // 部分区間 [2,7) の値: [7, 3, 3, 9, 0]
+    /// // 値で並べると [0(6), 3(3), 3(4), 7(2), 9(5)] → インデックス [6, 3, 4, 2, 5]
+    /// assert_eq!(wm.kth(2..7, 0), 6);
     /// assert_eq!(wm.kth(2..7, 1), 3);
-    /// assert_eq!(wm.kth(2..7, 2), 3);
-    /// assert_eq!(wm.kth(2..7, 3), 7);
-    /// assert_eq!(wm.kth(2..7, 4), 9);
+    /// assert_eq!(wm.kth(2..7, 2), 4);
+    /// assert_eq!(wm.kth(2..7, 3), 2);
+    /// assert_eq!(wm.kth(2..7, 4), 5);
     /// ```
-    pub fn kth(&self, range: impl RangeBounds<usize>, mut k: usize) -> u64 {
+    pub fn kth(&self, range: impl RangeBounds<usize>, mut k: usize) -> usize {
         let (mut l, mut r) = self.bounds_to_lr(range);
         assert!(k < r - l);
 
-        let mut val = 0u64;
-
+        // 値そのものは不要。葉配列位置 l..r を追跡し、残った k をオフセットとして使う。
         for level in (0..self.max_log).rev() {
             let br = &self.bitmaps[self.max_log - 1 - level];
             let l1 = br.rank1(l);
             let r1 = br.rank1(r);
             let zeros = (r - l) - (r1 - l1);
+
             if k < zeros {
-                // go to 0-side
+                // 0 側へ
                 l = l - l1;
                 r = r - r1;
             } else {
-                // go to 1-side
+                // 1 側へ
                 k -= zeros;
-                val |= 1u64 << level;
                 l = self.mids[level] + l1;
                 r = self.mids[level] + r1;
             }
         }
 
-        val
+        // 葉配列（値順）での位置は l + k → 元インデックスは leaf_ids[その位置]
+        self.leaf_ids[l + k]
     }
 
     /// number of x in [l, r) with lower <= x < upper. O(logσ)
@@ -505,15 +496,7 @@ impl WaveletMatrix {
     /// // [2,7) = [7, 3, 3, 9, 0] sorted => [0, 3, 3, 7, 9]
     /// assert_eq!(wm.range_freq(2..7, 3u64, 8u64), 3);
     /// ```
-    pub fn range_freq(
-        &self,
-        range: impl RangeBounds<usize> + Clone,
-        lower: impl Into<u64>,
-        upper: impl Into<u64>,
-    ) -> usize {
-        let lower = lower.into();
-        let upper = upper.into();
-
+    pub fn range_freq(&self, range: impl RangeBounds<usize> + Clone, lower: T, upper: T) -> usize {
         if lower >= upper {
             return 0;
         }
@@ -522,7 +505,7 @@ impl WaveletMatrix {
     }
 
     /// count x in [l, r) with x < upper
-    fn freq_lt(&self, range: impl RangeBounds<usize>, upper: impl Into<u64>) -> usize {
+    fn freq_lt(&self, range: impl RangeBounds<usize>, upper: T) -> usize {
         let upper = upper.into();
         let (mut l, mut r) = self.bounds_to_lr(range);
 
@@ -579,8 +562,8 @@ impl WaveletMatrix {
     pub fn range_report_each(
         &self,
         range: impl RangeBounds<usize>,
-        lower: impl Into<u64>,
-        upper: impl Into<u64>,
+        lower: T,
+        upper: T,
         mut f: impl FnMut(usize),
     ) {
         let lower = lower.into();
@@ -616,7 +599,7 @@ impl WaveletMatrix {
 
         // 値レンジの完全外/完全内判定
         let lo = base;
-        let len = (1u64) << h;
+        let len = 1u64 << h;
         let hi = lo + len;
 
         if hi <= lower || upper <= lo {
@@ -708,6 +691,14 @@ impl WaveletMatrix {
     }
 }
 
+impl<T> Index<usize> for WaveletMatrix<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.raw_data[index]
+    }
+}
+
 #[derive(Clone)]
 struct BitRank {
     n: usize,
@@ -745,6 +736,7 @@ impl BitRank {
     }
 
     #[inline]
+    #[allow(dead_code)]
     fn get(&self, i: usize) -> bool {
         debug_assert!(i < self.n);
         ((self.words[i >> 6] >> (i & 63)) & 1) != 0
@@ -765,50 +757,6 @@ impl BitRank {
         }
 
         sum
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn basic_ops() {
-        let a = vec![5u64, 1, 7, 3, 3, 9, 0, 6];
-        let wm = WaveletMatrix::new(a.clone());
-
-        // access
-        for i in 0..a.len() {
-            assert_eq!(wm.access(i), a[i] as u64);
-        }
-
-        // rank
-        assert_eq!(wm.rank(.., 3), 2);
-        assert_eq!(wm.rank(2..6, 3), 2);
-        assert_eq!(wm.rank(.., 10), 0);
-
-        // kth (quantile)
-        // [l,r) = [0,8): sorted => [0,1,3,3,5,6,7,9]
-        assert_eq!(wm.kth(0..8, 0), 0);
-        assert_eq!(wm.kth(0..8, 1), 1);
-        assert_eq!(wm.kth(0..8, 2), 3);
-        assert_eq!(wm.kth(0..8, 3), 3);
-        assert_eq!(wm.kth(0..8, 4), 5);
-        assert_eq!(wm.kth(0..8, 5), 6);
-        assert_eq!(wm.kth(0..8, 6), 7);
-        assert_eq!(wm.kth(0..8, 7), 9);
-
-        // range_freq: in [0,8) count in [3,7)  => 3,3,5,6 => 4
-        assert_eq!(wm.range_freq(0..8, 3u64, 7u64), 4);
-
-        // 部分区間でも
-        // [2,7) = [7,3,3,9,0] sorted => [0,3,3,7,9]
-        assert_eq!(wm.kth(2..7, 0), 0);
-        assert_eq!(wm.kth(2..7, 1), 3);
-        assert_eq!(wm.kth(2..7, 2), 3);
-        assert_eq!(wm.kth(2..7, 3), 7);
-        assert_eq!(wm.kth(2..7, 4), 9);
-        assert_eq!(wm.range_freq(2..7, 3u64, 8u64), 3);
     }
 }
 
