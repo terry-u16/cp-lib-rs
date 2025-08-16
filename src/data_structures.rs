@@ -280,13 +280,21 @@ impl<T: Ord> Index<usize> for Compressor<T> {
 #[derive(Clone)]
 pub struct WaveletMatrix {
     n: usize,
-    max_log: usize,        // number of bit levels (e.g., up to 64 for u64)
-    bitmaps: Vec<BitRank>, // per level bitmap of '1's
-    mids: Vec<usize>,      // per level, number of zeros (split point)
+    /// number of bit levels (e.g., up to 64 for u64)
+    max_log: usize,
+    /// per level bitmap of '1's（高ビット→低ビットの順に格納）
+    bitmaps: Vec<BitRank>,
+    /// per level, number of zeros (split point)（インデックスはビット位置 0..max_log-1）
+    mids: Vec<usize>,
+    /// 末端（全ビット処理後＝値順）での元インデックス。列挙時に直接参照する。
+    leaf_ids: Vec<usize>,
 }
 
 impl WaveletMatrix {
     /// Build from data. O(Nlogσ)
+    ///
+    /// Wavelet Matrixの計算量はデータの最大ビット長に依存する。
+    /// 計算量を削減するため、あらかじめ座標圧縮しておくことを推奨。
     pub fn new<I, T>(data: I) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -297,11 +305,15 @@ impl WaveletMatrix {
         let maxv = data.iter().copied().max().unwrap_or(0);
         let computed_log = 64usize.saturating_sub(maxv.leading_zeros() as usize).max(1);
         let max_log = computed_log;
+        assert!(max_log < 64, "WaveletMatrix supports up to 63 bits");
 
         let mut bitmaps = Vec::with_capacity(max_log);
         let mut mids = vec![0usize; max_log];
 
         let mut cur = data;
+
+        // 列挙のため、元インデックスを持ち回る
+        let mut ids: Vec<usize> = (0..n).collect();
 
         // process from high bit to low bit
         for level in (0..max_log).rev() {
@@ -314,18 +326,29 @@ impl WaveletMatrix {
             // stable partition by bit (0 then 1)
             let mut zeros = Vec::with_capacity(n);
             let mut ones = Vec::with_capacity(n);
+
+            // ids も同様に安定分割
+            let mut z_ids = Vec::with_capacity(n);
+            let mut o_ids = Vec::with_capacity(n);
+
             for (i, &v) in cur.iter().enumerate() {
                 if !bits[i] {
                     zeros.push(v);
+                    z_ids.push(ids[i]);
                 } else {
                     ones.push(v);
+                    o_ids.push(ids[i]);
                 }
             }
+
             let mid = zeros.len();
             mids[level] = mid;
 
             zeros.extend(ones);
+            z_ids.extend(o_ids);
             cur = zeros;
+            ids = z_ids;
+
             bitmaps.push(br);
         }
 
@@ -335,6 +358,7 @@ impl WaveletMatrix {
             max_log,
             bitmaps,
             mids,
+            leaf_ids: ids,
         }
     }
 
@@ -354,7 +378,9 @@ impl WaveletMatrix {
     /// ```
     pub fn access(&self, mut idx: usize) -> u64 {
         assert!(idx < self.n);
+
         let mut val = 0u64;
+
         for level in (0..self.max_log).rev() {
             let br = &self.bitmaps[self.max_log - 1 - level];
             let is_one = br.get(idx);
@@ -367,6 +393,7 @@ impl WaveletMatrix {
                 idx = idx - r1;
             }
         }
+
         val
     }
 
@@ -386,8 +413,8 @@ impl WaveletMatrix {
     /// ```
     pub fn rank(&self, range: impl RangeBounds<usize>, value: u64) -> usize {
         let (mut l, mut r) = self.bounds_to_lr(range);
-
         assert!(l <= r && r <= self.n);
+
         for level in (0..self.max_log).rev() {
             let br = &self.bitmaps[self.max_log - 1 - level];
             let bit = ((value >> level) & 1) != 0;
@@ -403,6 +430,7 @@ impl WaveletMatrix {
                 r = r - r1;
             }
         }
+
         r - l
     }
 
@@ -438,6 +466,7 @@ impl WaveletMatrix {
         assert!(k < r - l);
 
         let mut val = 0u64;
+
         for level in (0..self.max_log).rev() {
             let br = &self.bitmaps[self.max_log - 1 - level];
             let l1 = br.rank1(l);
@@ -455,6 +484,7 @@ impl WaveletMatrix {
                 r = self.mids[level] + r1;
             }
         }
+
         val
     }
 
@@ -494,12 +524,14 @@ impl WaveletMatrix {
     /// count x in [l, r) with x < upper
     fn freq_lt(&self, range: impl RangeBounds<usize>, upper: impl Into<u64>) -> usize {
         let upper = upper.into();
-
         let (mut l, mut r) = self.bounds_to_lr(range);
+
         if l == r {
             return 0;
         }
+
         let mut cnt = 0usize;
+
         for level in (0..self.max_log).rev() {
             let br = &self.bitmaps[self.max_log - 1 - level];
             let l1 = br.rank1(l);
@@ -519,7 +551,140 @@ impl WaveletMatrix {
                 r = r - r1;
             }
         }
+
         cnt
+    }
+
+    /// 区間 `range` において、値が `[lower, upper)` の要素の **元インデックス**を
+    /// **ヒープ確保なし**で列挙し、コールバック関数を呼び出します。
+    ///
+    /// 発見順は値順ブロック寄り・安定ではありません。
+    /// `f` は該当インデックスごとに1回呼ばれます。
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use cp_lib_rs::data_structures::WaveletMatrix;
+    ///
+    /// let a = vec![5u64, 1, 7, 3, 3, 9, 0, 6];
+    /// let wm = WaveletMatrix::new(a.clone());
+    ///
+    /// // [0,8) ∩ 値 [3,7) に入る元インデックスを列挙
+    /// let mut result = Vec::new();
+    /// wm.range_report_each(0..8, 3u64, 7u64, |idx| result.push(idx));
+    ///
+    /// result.sort_unstable();
+    /// assert_eq!(result, vec![0, 3, 4, 7])
+    /// ```
+    pub fn range_report_each(
+        &self,
+        range: impl RangeBounds<usize>,
+        lower: impl Into<u64>,
+        upper: impl Into<u64>,
+        mut f: impl FnMut(usize),
+    ) {
+        let lower = lower.into();
+        let upper = upper.into();
+        if lower >= upper {
+            return;
+        }
+
+        let (l, r) = self.bounds_to_lr(range);
+        if l == r {
+            return;
+        }
+
+        // ルート（高さ = max_log, 値プレフィクス base=0）から開始。
+        self.report_between_rec(l, r, self.max_log, 0u64, lower, upper, &mut f);
+    }
+
+    // ノード（高さ h, 値レンジ [base, base+2^h)）と、現在の添字範囲 [l,r) について、
+    // 区間 [lower, upper) に入る要素を列挙。完全内包なら子へ一気に降りて leaf_ids を吐く。
+    fn report_between_rec<F: FnMut(usize)>(
+        &self,
+        l: usize,
+        r: usize,
+        h: usize,
+        base: u64,
+        lower: u64,
+        upper: u64,
+        f: &mut F,
+    ) {
+        if l >= r {
+            return;
+        }
+
+        // 値レンジの完全外/完全内判定
+        let lo = base;
+        let len = (1u64) << h;
+        let hi = lo + len;
+
+        if hi <= lower || upper <= lo {
+            // 完全に外れる
+            return;
+        }
+
+        if lower <= lo && hi <= upper {
+            // 完全に中に入る → 葉へ降りて一括列挙
+            self.emit_all_rec(l, r, h, f);
+            return;
+        }
+
+        // 部分的に重なる → 子に分割して再帰
+        if h == 0 {
+            // 1点値 (= base) のはず。ここに来たなら lower <= base < upper。
+            // 現在の [l,r) は最終レベルの連続区間になっているので、そのまま吐く。
+            for &idx in &self.leaf_ids[l..r] {
+                f(idx);
+            }
+            return;
+        }
+
+        let bi = self.max_log - h; // bitmap index（高ビット→低ビットで 0..）
+        let bitpos = h - 1; // いま見るビット位置（0-based, LSB側が0）
+        let br = &self.bitmaps[bi];
+        let l1 = br.rank1(l);
+        let r1 = br.rank1(r);
+
+        let zl = l - l1;
+        let zr = r - r1; // 0 側
+        let ol = self.mids[bitpos] + l1;
+        let or_ = self.mids[bitpos] + r1; // 1 側
+
+        // 0 子: base そのまま
+        self.report_between_rec(zl, zr, h - 1, base, lower, upper, f);
+        // 1 子: base に (1<<bitpos) を立てる
+        self.report_between_rec(ol, or_, h - 1, base | (1u64 << bitpos), lower, upper, f);
+    }
+
+    // 「このノード配下のすべて」を列挙：葉に降りて leaf_ids のスライスをそのまま吐く
+    fn emit_all_rec<F: FnMut(usize)>(&self, l: usize, r: usize, h: usize, f: &mut F) {
+        if l >= r {
+            return;
+        }
+
+        if h == 0 {
+            for &idx in &self.leaf_ids[l..r] {
+                f(idx);
+            }
+
+            return;
+        }
+
+        let bi = self.max_log - h;
+        let bitpos = h - 1;
+        let br = &self.bitmaps[bi];
+        let l1 = br.rank1(l);
+        let r1 = br.rank1(r);
+
+        let zl = l - l1;
+        let zr = r - r1;
+        let ol = self.mids[bitpos] + l1;
+        let or_ = self.mids[bitpos] + r1;
+
+        // 0→1 の順で降りる（順序は用途に応じて変更可）
+        self.emit_all_rec(zl, zr, h - 1, f);
+        self.emit_all_rec(ol, or_, h - 1, f);
     }
 
     #[inline]
@@ -556,18 +721,22 @@ impl BitRank {
         let n = bits.len();
         let w = (n + 63) >> 6;
         let mut words = vec![0u64; w];
+
         for (i, &b) in bits.iter().enumerate() {
             if b {
                 words[i >> 6] |= 1u64 << (i & 63);
             }
         }
+
         let mut prefix_pop = Vec::with_capacity(w + 1);
         prefix_pop.push(0);
         let mut acc: u32 = 0;
+
         for &x in &words {
             acc += x.count_ones();
             prefix_pop.push(acc);
         }
+
         Self {
             n,
             words,
@@ -581,17 +750,20 @@ impl BitRank {
         ((self.words[i >> 6] >> (i & 63)) & 1) != 0
     }
 
-    // rank1(pos): number of 1s in [0, pos)
+    /// rank1(pos): number of 1s in [0, pos)
     #[inline]
     fn rank1(&self, pos: usize) -> usize {
         let pos = pos.min(self.n);
         let w = pos >> 6;
         let m = pos & 63;
         let mut sum = self.prefix_pop[w] as usize;
+
         if m != 0 {
-            let mask = if m == 64 { u64::MAX } else { (1u64 << m) - 1 };
+            // m ∈ [1, 63] が保証されるので 64 シフトの心配はない
+            let mask = u64::MAX >> (64 - m);
             sum += (self.words[w] & mask).count_ones() as usize;
         }
+
         sum
     }
 }
