@@ -1,6 +1,7 @@
 pub mod annealing;
 pub mod beam;
 pub mod data_structures;
+pub mod diagnostics;
 pub mod graph;
 pub mod grid;
 pub mod modint;
