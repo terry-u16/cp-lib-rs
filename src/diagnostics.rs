@@ -13,6 +13,8 @@ use std::{
 /// # Examples
 ///
 /// ```
+/// use cp_lib_rs::diagnostics::Perf;
+///
 /// // 計測グループを作成する
 /// // dropされるときに計測結果を出力する
 /// let mut perf = Perf::new("Group");
