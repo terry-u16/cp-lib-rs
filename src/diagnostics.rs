@@ -43,7 +43,7 @@ use std::{
 ///
 /// for i in 0..100000 {
 ///     // perfのインスタンス化が面倒な場合はシングルトンを使う
-///     let sw = Perf::start_singleton("sum sqrt");
+///     let sw = Perf::start_singleton("sum sq");
 ///     _sum_sq += i * i;
 ///     sw.stop();
 /// }
