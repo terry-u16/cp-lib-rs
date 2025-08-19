@@ -835,6 +835,54 @@ impl RollingHash {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct Queue<T> {
+    data: Vec<T>,
+    pos: usize,
+}
+
+impl<T> Queue<T> {
+    pub fn reserve(&mut self, n: usize) {
+        if n > self.data.len() {
+            self.data.reserve(n - self.data.len());
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        self.data.len() - self.pos
+    }
+
+    pub fn empty(&self) -> bool {
+        self.pos == self.data.len()
+    }
+
+    pub fn push(&mut self, t: T) {
+        self.data.push(t);
+    }
+
+    pub fn front(&self) -> Option<&T> {
+        if self.pos < self.data.len() {
+            Some(&self.data[self.pos])
+        } else {
+            None
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.data.clear();
+        self.pos = 0;
+    }
+
+    pub fn pop(&mut self) -> Option<&T> {
+        if self.pos < self.data.len() {
+            self.pos += 1;
+            Some(&self.data[self.pos - 1])
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
