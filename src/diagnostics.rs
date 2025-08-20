@@ -14,6 +14,7 @@ use std::{
 ///
 /// ```
 /// use cp_lib_rs::diagnostics::Perf;
+/// use cp_lib_rs::perf;
 ///
 /// // 計測グループを作成する
 /// // dropされるときに計測結果を出力する
@@ -46,6 +47,13 @@ use std::{
 ///     let sw = Perf::start_singleton("sum sq");
 ///     _sum_sq += i * i;
 ///     sw.stop();
+/// }
+///
+/// let mut _sum_pow = 0f64;
+///
+/// for i in 0..100000 {
+///     // マクロでショートハンド化もできる
+///     _sum_pow += perf!("sum pow", (i as f64).powf(3.1415926));
 /// }
 /// ```
 pub struct Perf {
@@ -114,6 +122,16 @@ impl Drop for Perf {
             }
         }
     }
+}
+
+#[macro_export]
+macro_rules! perf {
+    ($name: expr, $body: expr) => {{
+        let sw = Perf::start_singleton($name);
+        let result = $body;
+        sw.stop();
+        result
+    }};
 }
 
 pub struct StopWatch<M: WithMut<Perf>> {
@@ -207,44 +225,5 @@ impl<T> WithMut<T> for Rc<RefCell<T>> {
     fn with_mut<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> R {
         let mut guard = self.borrow_mut();
         f(&mut *guard)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_measure() {
-        let mut perf = Perf::new("group");
-        let mut _sum = 0u64;
-
-        for i in 0..100000 {
-            // start-stop間の処理時間を計測する
-            let sw = perf.start("sum");
-            _sum += i;
-            sw.stop();
-
-            // 名前は&'strでもStringでもOK
-            let sw = perf.start(format!("no-op"));
-            sw.stop();
-        }
-
-        let mut _sum_sqrt = 0f64;
-
-        for i in 0..100000 {
-            // 明示的にstop()を呼ばなくても、スコープを抜ける際に自動でstopする
-            let _sw = perf.start("sum sqrt".to_string());
-            _sum_sqrt += (i as f64).sqrt();
-        }
-
-        let mut _sum_sq = 0u64;
-
-        for i in 0..100000 {
-            // perfのインスタンス化が面倒な場合はシングルトンを使う
-            let sw = Perf::start_singleton("sum sqrt");
-            _sum_sq += i * i;
-            sw.stop();
-        }
     }
 }
