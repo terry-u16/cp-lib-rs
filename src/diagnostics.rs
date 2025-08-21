@@ -1,7 +1,8 @@
+use itertools::Itertools;
+use rustc_hash::FxHashMap;
 use std::{
     borrow::Cow,
     cell::RefCell,
-    collections::BTreeMap,
     fmt::Display,
     io::{self, IsTerminal as _},
     rc::Rc,
@@ -58,7 +59,7 @@ use std::{
 /// ```
 pub struct Perf {
     name: Option<Cow<'static, str>>,
-    measures: BTreeMap<Cow<'static, str>, Measure>,
+    measures: FxHashMap<Cow<'static, str>, Measure>,
 }
 
 #[allow(dead_code)]
@@ -69,7 +70,7 @@ impl Perf {
     pub fn new(name: impl Into<Cow<'static, str>>) -> Self {
         Self {
             name: Some(name.into()),
-            measures: BTreeMap::new(),
+            measures: FxHashMap::default(),
         }
     }
 
@@ -77,7 +78,7 @@ impl Perf {
     pub fn new_anonymous() -> Self {
         Self {
             name: None,
-            measures: BTreeMap::new(),
+            measures: FxHashMap::default(),
         }
     }
 
@@ -104,22 +105,28 @@ impl Perf {
 
 impl Drop for Perf {
     fn drop(&mut self) {
-        if !self.measures.is_empty() {
-            // ターミナルかどうかで色を付けるかどうか分岐
-            let is_tty = io::stderr().is_terminal();
-            let name = self.name.as_deref().unwrap_or("Anonymous");
+        if self.measures.is_empty() {
+            return;
+        }
 
-            if is_tty {
-                // コンソール → 色付き
-                eprintln!("\x1b[35m[{}] Performance measures\x1b[0m", name);
-            } else {
-                // リダイレクト → 色なし
-                eprintln!("[{}] Performance measures", name);
-            }
+        // ターミナルかどうかで色を付けるかどうか分岐
+        let is_tty = io::stderr().is_terminal();
+        let name = self.name.as_deref().unwrap_or("Anonymous");
 
-            for (name, measure) in &self.measures {
-                eprintln!("{}: {}", name, measure);
-            }
+        if is_tty {
+            // コンソール → 色付き
+            eprintln!("\x1b[35m[{}] Performance measures\x1b[0m", name);
+        } else {
+            // リダイレクト → 色なし
+            eprintln!("[{}] Performance measures", name);
+        }
+
+        for (name, measure) in self
+            .measures
+            .iter()
+            .sorted_unstable_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()))
+        {
+            eprintln!("{}: {}", name, measure);
         }
     }
 }
@@ -180,21 +187,16 @@ impl Measure {
     }
 
     fn mean(&self) -> Duration {
-        if self.cnt == 0 {
-            Duration::from_millis(0)
-        } else {
-            Duration::from_secs_f64(self.sum / self.cnt as f64)
-        }
+        assert_ne!(self.cnt, 0);
+        Duration::from_secs_f64(self.sum / self.cnt as f64)
     }
 
     fn std_dev(&self) -> Duration {
-        if self.cnt == 0 {
-            Duration::from_millis(0)
-        } else {
-            let mean = self.mean().as_secs_f64();
-            let variance = (self.sum_sq / self.cnt as f64) - (mean * mean);
-            Duration::from_secs_f64(variance.sqrt())
-        }
+        assert_ne!(self.cnt, 0);
+
+        let mean = self.mean().as_secs_f64();
+        let variance = (self.sum_sq / self.cnt as f64) - (mean * mean);
+        Duration::from_secs_f64(variance.sqrt())
     }
 }
 
