@@ -243,17 +243,15 @@ pub struct SimdSelector {
 impl SimdSelector {
     #[target_feature(enable = "bmi1,avx")]
     unsafe fn select_simd(&self, rng: &mut AnnealingRng) -> usize {
-        unsafe {
-            // SIMD命令を使用して、重みの中からランダムな値以上の最初のインデックスを選択する
-            // 8要素同時に比較してからtrue/falseのビットを取得し、tzcntで最初のtrueのインデックスを返す
-            let x = rng.gen::<f32>();
-            let x = std::arch::x86_64::_mm256_set1_ps(x);
-            let cmp =
-                std::arch::x86_64::_mm256_cmp_ps(self.prefix_sum, x, std::arch::x86_64::_CMP_GE_OQ);
-            let flag = std::arch::x86_64::_mm256_movemask_ps(cmp);
-            let index = std::arch::x86_64::_tzcnt_u32(flag as u32) as usize;
-            index
-        }
+        // SIMD命令を使用して、重みの中からランダムな値以上の最初のインデックスを選択する
+        // 8要素同時に比較してからtrue/falseのビットを取得し、tzcntで最初のtrueのインデックスを返す
+        let x = rng.gen::<f32>();
+        let x = std::arch::x86_64::_mm256_set1_ps(x);
+        let cmp =
+            std::arch::x86_64::_mm256_cmp_ps(self.prefix_sum, x, std::arch::x86_64::_CMP_GE_OQ);
+        let flag = std::arch::x86_64::_mm256_movemask_ps(cmp);
+        let index = std::arch::x86_64::_tzcnt_u32(flag as u32) as usize;
+        index
     }
 }
 
