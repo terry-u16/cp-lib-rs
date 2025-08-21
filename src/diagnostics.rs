@@ -62,7 +62,6 @@ pub struct Perf {
     measures: FxHashMap<Cow<'static, str>, Measure>,
 }
 
-#[allow(dead_code)]
 impl Perf {
     thread_local!(static SINGLETON: Rc<RefCell<Perf>> = Rc::new(RefCell::new(Perf::new("Singleton"))));
 
