@@ -1,7 +1,7 @@
 use ac_library::Monoid;
 use itertools::Itertools;
 use rand::prelude::*;
-use rand::thread_rng;
+use rand::rng;
 use std::ops::Index;
 use std::{
     ops::{Bound, RangeBounds},
@@ -67,27 +67,27 @@ impl IndexSet {
 #[derive(Debug, Clone)]
 pub struct FastClearArray {
     values: Vec<u64>,
-    gen: u64,
+    generation: u64,
 }
 
 impl FastClearArray {
     pub fn new(len: usize) -> Self {
         Self {
             values: vec![0; len],
-            gen: 1,
+            generation: 1,
         }
     }
 
     pub fn clear(&mut self) {
-        self.gen += 1;
+        self.generation += 1;
     }
 
     pub fn set_true(&mut self, index: usize) {
-        self.values[index] = self.gen;
+        self.values[index] = self.generation;
     }
 
     pub fn get(&self, index: usize) -> bool {
-        self.values[index] == self.gen
+        self.values[index] == self.generation
     }
 
     pub fn len(&self) -> usize {
@@ -789,7 +789,7 @@ impl RollingHash {
 
     pub fn new(values: impl IntoIterator<Item = impl Into<u64>>) -> Self {
         let values = values.into_iter();
-        let base = thread_rng().gen_range(1 << 60..Self::MOD);
+        let base = rng().random_range(1 << 60..Self::MOD);
         let mut pow = vec![1];
         let mut hashes = vec![0];
         let len = values.size_hint().0;
@@ -827,11 +827,7 @@ impl RollingHash {
         let t = a as u128 * b as u128;
         let t = (t >> 61) as u64 + ((t as u64) & Self::MOD);
 
-        if t >= Self::MOD {
-            t - Self::MOD
-        } else {
-            t
-        }
+        if t >= Self::MOD { t - Self::MOD } else { t }
     }
 }
 

@@ -1,8 +1,8 @@
 //! 焼きなましライブラリ
 #![macro_use]
-use itertools::{izip, Itertools};
-use rand::{distributions::Distribution, Rng as _};
-use rand_distr::WeightedAliasIndex;
+use itertools::{Itertools, izip};
+use rand::Rng as _;
+use rand_distr::{Distribution as _, weighted::WeightedAliasIndex};
 use rand_pcg::Pcg64Mcg;
 use std::{
     cell::RefCell,
@@ -245,7 +245,7 @@ impl SimdSelector {
     unsafe fn select_simd(&self, rng: &mut AnnealingRng) -> usize {
         // SIMD命令を使用して、重みの中からランダムな値以上の最初のインデックスを選択する
         // 8要素同時に比較してからtrue/falseのビットを取得し、tzcntで最初のtrueのインデックスを返す
-        let x = rng.gen::<f32>();
+        let x = rng.random::<f32>();
         let x = std::arch::x86_64::_mm256_set1_ps(x);
         let cmp =
             std::arch::x86_64::_mm256_cmp_ps(self.prefix_sum, x, std::arch::x86_64::_CMP_GE_OQ);
@@ -388,7 +388,9 @@ pub fn run_annealing<N: NeighborDelegator, S: NeighborSelector, const I: usize>(
     let mut threshold_generator = threshold_generator.borrow_mut();
     let mut context =
         AnnealingContext::new::<N>(env, state, &mut threshold_generator, start_temp, seed);
-    context.threshold_generator.set_pos(context.rng.gen());
+    context
+        .threshold_generator
+        .set_pos(context.rng.random_range(0..ThresholdGenerator::LEN));
     let selector = S::new(N::get_neighbor_weights());
 
     let since = Instant::now();
@@ -512,7 +514,7 @@ impl ThresholdGenerator {
     fn new(seed: u128) -> Self {
         let mut rng = Pcg64Mcg::new(seed);
         let log_randoms = (0..Self::LEN)
-            .map(|_| rng.gen_range(0.0f64..1.0).ln())
+            .map(|_| rng.random_range(0.0f64..1.0).ln())
             .collect_vec();
 
         Self {
@@ -540,7 +542,7 @@ impl ThresholdGenerator {
 #[cfg(test)]
 mod test {
     use crate::{
-        annealing::{run_annealing, SimdSelector},
+        annealing::{SimdSelector, run_annealing},
         random::RandExtension,
     };
     use itertools::Itertools;

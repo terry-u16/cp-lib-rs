@@ -242,7 +242,7 @@ mod tests {
 
     fn check_range<R: BoundedRange<usize> + Clone, F: Fn(&mut StdRng, R) -> usize>(
         range: R,
-        gen: F,
+        generator: F,
     ) {
         let mut rng = StdRng::seed_from_u64(42);
         let mut values = HashSet::new();
@@ -251,7 +251,7 @@ mod tests {
         let end = start + width;
 
         for _ in 0..10000 {
-            let v = gen(&mut rng, range.clone());
+            let v = generator(&mut rng, range.clone());
             assert!(start <= v && v < end, "value {:?} out of range", v);
             values.insert(v);
         }
