@@ -83,11 +83,11 @@ pub trait PrintLine {
 /// 単体値版
 impl<T: Display> PrintLine for T {
     fn println(&self) {
-        println!("{}", self);
+        println!("{self}");
     }
 
     fn eprintln(&self) {
-        eprintln!("{}", self);
+        eprintln!("{self}");
     }
 }
 
@@ -102,7 +102,7 @@ impl<T: Display> PrintLine for [T] {
             if !first {
                 out.write_all(b" ").unwrap();
             }
-            write!(out, "{}", x).unwrap();
+            write!(out, "{x}").unwrap();
             first = false;
         }
 
@@ -119,7 +119,7 @@ impl<T: Display> PrintLine for [T] {
             if !first {
                 out.write_all(b" ").unwrap();
             }
-            write!(out, "{}", x).unwrap();
+            write!(out, "{x}").unwrap();
             first = false;
         }
 

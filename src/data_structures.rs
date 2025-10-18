@@ -48,6 +48,7 @@ impl IndexSet {
         self.positions[value].is_some()
     }
 
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -90,6 +91,7 @@ impl FastClearArray {
         self.values[index] == self.generation
     }
 
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -242,6 +244,7 @@ impl<T: Ord> Compressor<T> {
     }
 
     /// 圧縮前の値の数を取得する
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.values.len()
     }
@@ -414,8 +417,8 @@ impl<T: Clone + Into<u64> + PartialOrd> WaveletMatrix<T> {
             } else {
                 let l1 = br.rank1(l);
                 let r1 = br.rank1(r);
-                l = l - l1;
-                r = r - r1;
+                l -= l1;
+                r -= r1;
             }
         }
 
@@ -465,8 +468,8 @@ impl<T: Clone + Into<u64> + PartialOrd> WaveletMatrix<T> {
 
             if k < zeros {
                 // 0 側へ
-                l = l - l1;
-                r = r - r1;
+                l -= l1;
+                r -= r1;
             } else {
                 // 1 側へ
                 k -= zeros;
@@ -530,8 +533,8 @@ impl<T: Clone + Into<u64> + PartialOrd> WaveletMatrix<T> {
                 r = self.mids[level] + r1;
             } else {
                 // stay in zeros
-                l = l - l1;
-                r = r - r1;
+                l -= l1;
+                r -= r1;
             }
         }
 
@@ -583,6 +586,7 @@ impl<T: Clone + Into<u64> + PartialOrd> WaveletMatrix<T> {
 
     // ノード（高さ h, 値レンジ [base, base+2^h)）と、現在の添字範囲 [l,r) について、
     // 区間 [lower, upper) に入る要素を列挙。完全内包なら子へ一気に降りて leaf_ids を吐く。
+    #[allow(clippy::too_many_arguments)]
     fn report_between_rec<F: FnMut(usize)>(
         &self,
         l: usize,
@@ -923,17 +927,17 @@ mod test {
     #[test]
     fn fast_clear_array() {
         let mut array = FastClearArray::new(5);
-        assert_eq!(array.get(0), false);
+        assert!(!array.get(0));
 
         array.set_true(0);
-        assert_eq!(array.get(0), true);
-        assert_eq!(array.get(1), false);
+        assert!(array.get(0));
+        assert!(!array.get(1));
 
         array.clear();
-        assert_eq!(array.get(0), false);
+        assert!(!array.get(0));
 
         array.set_true(0);
-        assert_eq!(array.get(0), true);
+        assert!(array.get(0));
     }
 
     #[test]

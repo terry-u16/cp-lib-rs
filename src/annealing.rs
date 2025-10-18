@@ -131,7 +131,7 @@ macro_rules! neighbors {
             $( $variant:ident => $weight:expr ),+ $(,)?
         ]
     ) => {
-        use crate::annealing::Neighbor as _;
+        use $crate::annealing::Neighbor as _;
 
         // generate()内のmatch式で使用するNEIGHBOR_INDEXを定義する
         neighbors! {
@@ -160,7 +160,7 @@ macro_rules! neighbors {
             const NAMES: &'static [&'static str] = &[$(stringify!($variant), )+];
         }
 
-        impl crate::annealing::NeighborDelegator for $delegator_name
+        impl $crate::annealing::NeighborDelegator for $delegator_name
         {
             type Env = $env;
             type State = $state;
@@ -176,7 +176,7 @@ macro_rules! neighbors {
                 Self::NAMES
             }
 
-            fn step(context: &mut crate::annealing::AnnealingContext<Self::Env, Self::State>, neighbor_index: usize) {
+            fn step(context: &mut $crate::annealing::AnnealingContext<Self::Env, Self::State>, neighbor_index: usize) {
                 match neighbor_index {
                     $($variant::NEIGHBOR_INDEX => {
                         let Some(neighbor) = $variant::generate(context.env, &context.state, &mut context.rng, context.progress) else {
@@ -250,14 +250,14 @@ impl SimdSelector {
         let cmp =
             std::arch::x86_64::_mm256_cmp_ps(self.prefix_sum, x, std::arch::x86_64::_CMP_GE_OQ);
         let flag = std::arch::x86_64::_mm256_movemask_ps(cmp);
-        let index = std::arch::x86_64::_tzcnt_u32(flag as u32) as usize;
-        index
+
+        std::arch::x86_64::_tzcnt_u32(flag as u32) as usize
     }
 }
 
 impl NeighborSelector for SimdSelector {
     fn new(weights: Vec<f64>) -> Self {
-        assert!(weights.len() > 0, "Weights must not be empty");
+        assert!(!weights.is_empty(), "Weights must not be empty");
         assert!(
             weights.len() <= 8,
             "SimdSelector requires weights of length 8 or less"
@@ -279,8 +279,8 @@ impl NeighborSelector for SimdSelector {
         let sum = prefix_sum[7];
         assert!(sum > 0.0, "Weights must not all be zero");
 
-        for i in 0..prefix_sum.len() {
-            prefix_sum[i] /= sum; // 正規化
+        for v in prefix_sum.iter_mut() {
+            *v /= sum; // 正規化
         }
 
         let prefix_sum = unsafe { std::arch::x86_64::_mm256_loadu_ps(prefix_sum.as_ptr()) };
@@ -347,11 +347,7 @@ impl Display for AnnealingStatistics {
         {
             let percent = accepted as f64 / selected as f64 * 100.0;
 
-            writeln!(
-                f,
-                "{:11}: {} / {} ({:.2}%)",
-                name, accepted, selected, percent
-            )?;
+            writeln!(f, "{name:11}: {accepted} / {selected} ({percent:.2}%)")?;
         }
 
         Ok(())
@@ -412,7 +408,7 @@ pub fn run_annealing<N: NeighborDelegator, S: NeighborSelector, const I: usize>(
         N::step(&mut context, neighbor_index);
     }
 
-    context.stats.final_score = context.best_state.score(&env).raw_score();
+    context.stats.final_score = context.best_state.score(env).raw_score();
 
     (context.best_state, context.stats)
 }
@@ -439,7 +435,7 @@ impl<'a, E, S: State<Env = E>> AnnealingContext<'a, E, S> {
         seed: u128,
     ) -> Self {
         let best_state = state.clone();
-        let current_score = state.score(&env);
+        let current_score = state.score(env);
         let best_score = current_score.annealing_score(1.0);
         let stats = AnnealingStatistics::new(current_score.raw_score(), N::get_neighbor_names());
         let progress = 0.0;
@@ -472,8 +468,7 @@ impl<'a, E, S: State<Env = E>> AnnealingContext<'a, E, S> {
             self.current_score.annealing_score(self.progress),
             self.temperature,
         );
-        let Some(new_score) = neighbor.eval(&self.env, &self.state, self.progress, threshold)
-        else {
+        let Some(new_score) = neighbor.eval(self.env, &self.state, self.progress, threshold) else {
             // 明らかに閾値に届かない場合はreject
             neighbor.rollback(self.env, &mut self.state);
             return;
@@ -482,7 +477,7 @@ impl<'a, E, S: State<Env = E>> AnnealingContext<'a, E, S> {
         if new_score.annealing_score(self.progress) >= threshold {
             self.stats.accept(neighbor_index);
             self.current_score = new_score;
-            neighbor.postprocess(&self.env, &mut self.state);
+            neighbor.postprocess(self.env, &mut self.state);
 
             let new_score = self.current_score.annealing_score(1.0);
 
@@ -737,7 +732,7 @@ mod test {
             42,
         );
 
-        eprintln!("{}", diagnostics);
+        eprintln!("{diagnostics}");
 
         eprintln!("score: {}", state.dist);
         eprintln!("state.dist: {:?}", state.order);

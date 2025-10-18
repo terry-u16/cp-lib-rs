@@ -11,7 +11,6 @@ use std::{
     hash::Hash,
     marker::PhantomData,
     time::Instant,
-    usize,
 };
 
 /// 状態遷移を行うために必要な情報
@@ -212,8 +211,6 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
                             }
                         }
                     }
-
-                    return;
                 }
             }
             // ハッシュ値が等しいものが存在していない場合
@@ -274,7 +271,7 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
                 &self.candidates[best_index]
             }
             None => {
-                assert!(self.candidates.len() > 0, "No candidates found.");
+                assert!(!self.candidates.is_empty(), "No candidates found.");
                 let mut best_index = 0;
                 let (mut best_cost, _) = self.costs[0];
 
@@ -306,12 +303,8 @@ struct BeamTree<E: Evaluator, H: BeamHash, S: State, A: Action> {
     direct_road: Vec<A>,
 }
 
-impl<
-        E: Evaluator,
-        H: BeamHash,
-        S: State<Evaluator = E, Hash = H, Action = A>,
-        A: Action<State = S>,
-    > BeamTree<E, H, S, A>
+impl<E: Evaluator, H: BeamHash, S: State<Evaluator = E, Hash = H, Action = A>, A: Action<State = S>>
+    BeamTree<E, H, S, A>
 {
     fn new(state: S, max_beam_width: usize) -> Self {
         Self {
@@ -575,6 +568,9 @@ impl<W: BeamWidthSuggester> BeamSearch<W> {
     }
 }
 
+pub type BeamCallbackCandidate<S> =
+    Candidate<<S as State>::Action, <S as State>::Evaluator, <S as State>::Hash>;
+
 pub trait BeamCallback {
     type State: State;
 
@@ -583,16 +579,8 @@ pub trait BeamCallback {
     fn on_expanded(
         &mut self,
         turn: usize,
-        canidates: &[Candidate<
-            <Self::State as State>::Action,
-            <Self::State as State>::Evaluator,
-            <Self::State as State>::Hash,
-        >],
-        best_candidate: &Candidate<
-            <Self::State as State>::Action,
-            <Self::State as State>::Evaluator,
-            <Self::State as State>::Hash,
-        >,
+        canidates: &[BeamCallbackCandidate<Self::State>],
+        best_candidate: &BeamCallbackCandidate<Self::State>,
     );
 
     fn on_turn_end(&mut self, turn: usize);
@@ -622,26 +610,18 @@ impl<S: State> BeamCallback for DefaultBeamCallback<S> {
 
     fn on_turn_start(&mut self, turn: usize, beam_width: usize) {
         self.since_turn = Instant::now();
-        eprintln!("[Turn {}]", turn);
-        eprintln!("beam width = {}", beam_width);
+        eprintln!("[Turn {turn}]");
+        eprintln!("beam width = {beam_width}");
     }
 
     fn on_expanded(
         &mut self,
         _turn: usize,
-        _canidates: &[Candidate<
-            <Self::State as State>::Action,
-            <Self::State as State>::Evaluator,
-            <Self::State as State>::Hash,
-        >],
-        best_candidate: &Candidate<
-            <Self::State as State>::Action,
-            <Self::State as State>::Evaluator,
-            <Self::State as State>::Hash,
-        >,
+        _canidates: &[BeamCallbackCandidate<Self::State>],
+        best_candidate: &BeamCallbackCandidate<Self::State>,
     ) {
         let best_score = best_candidate.evaluator.evaluate();
-        eprintln!("best score = {}", best_score);
+        eprintln!("best score = {best_score}");
     }
 
     fn on_turn_end(&mut self, _turn: usize) {

@@ -82,7 +82,7 @@ impl Perf {
     }
 
     /// 計測を開始する
-    pub fn start<'a>(&'a mut self, name: impl Into<Cow<'static, str>>) -> StopWatch<&'a mut Perf> {
+    pub fn start(&mut self, name: impl Into<Cow<'static, str>>) -> StopWatch<&mut Perf> {
         let name = name.into();
 
         StopWatch {
@@ -114,10 +114,10 @@ impl Drop for Perf {
 
         if is_tty {
             // コンソール → 色付き
-            eprintln!("\x1b[35m[{}] Performance measures\x1b[0m", name);
+            eprintln!("\x1b[35m[{name}] Performance measures\x1b[0m");
         } else {
             // リダイレクト → 色なし
-            eprintln!("[{}] Performance measures", name);
+            eprintln!("[{name}] Performance measures");
         }
 
         for (name, measure) in self
@@ -125,7 +125,7 @@ impl Drop for Perf {
             .iter()
             .sorted_unstable_by(|(a, _), (b, _)| a.as_ref().cmp(b.as_ref()))
         {
-            eprintln!("{}: {}", name, measure);
+            eprintln!("{name}: {measure}");
         }
     }
 }
@@ -160,7 +160,7 @@ impl<M: WithMut<Perf>> Drop for StopWatch<M> {
         self.perf.with_mut(|perf| {
             perf.measures
                 .entry(name)
-                .or_insert_with(Measure::new)
+                .or_default()
                 .add_measure(&duration)
         })
     }
@@ -174,10 +174,6 @@ struct Measure {
 }
 
 impl Measure {
-    fn new() -> Self {
-        Self::default()
-    }
-
     fn add_measure(&mut self, duration: &Duration) {
         let sec = duration.as_secs_f64();
         self.sum += sec;

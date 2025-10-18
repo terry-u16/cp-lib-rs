@@ -252,11 +252,7 @@ where
     }
 
     fn binary_operation(a: &Self::S, b: &Self::S) -> Self::S {
-        if a.0 >= b.0 {
-            *a
-        } else {
-            *b
-        }
+        if a.0 >= b.0 { *a } else { *b }
     }
 }
 

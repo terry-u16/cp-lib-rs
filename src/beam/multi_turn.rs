@@ -3,7 +3,7 @@ use ac_library::Segtree;
 use num_traits::bounds::LowerBounded;
 use rustc_hash::FxHashMap;
 use std::{
-    collections::{hash_map::Entry, VecDeque},
+    collections::{VecDeque, hash_map::Entry},
     fmt::{Debug, Display},
     hash::Hash,
     marker::PhantomData,
@@ -766,6 +766,9 @@ impl<W: BeamWidthSuggester> BeamSearch<W> {
     }
 }
 
+pub type BeamCallbackCandidate<S> =
+    Candidate<<S as State>::Action, <S as State>::Evaluator, <S as State>::Hash>;
+
 pub trait BeamCallback {
     type State: State;
 
@@ -774,18 +777,8 @@ pub trait BeamCallback {
     fn on_expanded(
         &mut self,
         turn: usize,
-        canidates: &[Candidate<
-            <Self::State as State>::Action,
-            <Self::State as State>::Evaluator,
-            <Self::State as State>::Hash,
-        >],
-        best_candidate: Option<
-            &Candidate<
-                <Self::State as State>::Action,
-                <Self::State as State>::Evaluator,
-                <Self::State as State>::Hash,
-            >,
-        >,
+        canidates: &[BeamCallbackCandidate<Self::State>],
+        best_candidate: Option<&BeamCallbackCandidate<Self::State>>,
     );
 
     fn on_turn_end(&mut self, turn: usize);
@@ -815,25 +808,15 @@ impl<S: State> BeamCallback for DefaultBeamCallback<S> {
 
     fn on_turn_start(&mut self, turn: usize, beam_width: usize) {
         self.since_turn = Instant::now();
-        eprintln!("[Turn {}]", turn);
-        eprintln!("beam width = {}", beam_width);
+        eprintln!("[Turn {turn}]");
+        eprintln!("beam width = {beam_width}");
     }
 
     fn on_expanded(
         &mut self,
         _turn: usize,
-        _canidates: &[Candidate<
-            <Self::State as State>::Action,
-            <Self::State as State>::Evaluator,
-            <Self::State as State>::Hash,
-        >],
-        best_candidate: Option<
-            &Candidate<
-                <Self::State as State>::Action,
-                <Self::State as State>::Evaluator,
-                <Self::State as State>::Hash,
-            >,
-        >,
+        _canidates: &[BeamCallbackCandidate<Self::State>],
+        best_candidate: Option<&BeamCallbackCandidate<Self::State>>,
     ) {
         match best_candidate {
             Some(best_candidate) => {
