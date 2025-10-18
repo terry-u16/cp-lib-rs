@@ -1,5 +1,10 @@
 //! よく使われるユーティリティ関数をまとめたモジュール
 
+use std::{
+    fmt::Display,
+    io::{self, BufWriter, Write as _},
+};
+
 use num::PrimInt;
 
 /// 最小値と最大値を更新するトレイト
@@ -31,6 +36,94 @@ impl<T: PartialOrd> ChangeMinMax for T {
             *self = v;
             true
         }
+    }
+}
+
+/// 条件に従ってYes/Noを出力する
+///
+/// # Examples
+///
+/// ```
+/// use cp_lib_rs::yesno;
+///
+/// let n = 3;
+/// yesno!(3 % 2 == 0)
+/// ```
+#[macro_export]
+macro_rules! yesno {
+    ($p:expr) => {
+        if $p {
+            println!("Yes");
+        } else {
+            println!("No");
+        }
+    };
+}
+
+/// 標準出力・標準エラー出力に出力するトレイト
+///
+/// # Examples
+///
+/// ```
+/// use cp_lib_rs::util::PrintLine as _;
+///
+/// let x = 5;
+/// x.println();
+/// x.eprintln();
+///
+/// let y = [1, 2, 3];
+/// y.println();
+/// y.eprintln();
+/// ```
+pub trait PrintLine {
+    fn println(&self);
+    fn eprintln(&self);
+}
+
+/// 単体値版
+impl<T: Display> PrintLine for T {
+    fn println(&self) {
+        println!("{}", self);
+    }
+
+    fn eprintln(&self) {
+        eprintln!("{}", self);
+    }
+}
+
+/// スライス版
+impl<T: Display> PrintLine for [T] {
+    fn println(&self) {
+        let stdout = io::stdout();
+        let mut out = BufWriter::new(stdout.lock());
+
+        let mut first = true;
+        for x in self {
+            if !first {
+                out.write_all(b" ").unwrap();
+            }
+            write!(out, "{}", x).unwrap();
+            first = false;
+        }
+
+        out.write_all(b"\n").unwrap();
+        // drop(out)でflush
+    }
+
+    fn eprintln(&self) {
+        let stderr = io::stderr();
+        let mut out = BufWriter::new(stderr.lock());
+
+        let mut first = true;
+        for x in self {
+            if !first {
+                out.write_all(b" ").unwrap();
+            }
+            write!(out, "{}", x).unwrap();
+            first = false;
+        }
+
+        out.write_all(b"\n").unwrap();
     }
 }
 
