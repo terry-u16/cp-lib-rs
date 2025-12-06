@@ -253,7 +253,7 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
         self.candidates.drain(..)
     }
 
-    fn calculate_best_candidate(&self) -> &Candidate<A, E, H> {
+    fn calculate_best_candidate(&self) -> Option<&Candidate<A, E, H>> {
         match &self.cost_segtree {
             Some(segtree) => {
                 let mut best_index = 0;
@@ -268,10 +268,13 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
                     }
                 }
 
-                &self.candidates[best_index]
+                Some(&self.candidates[best_index])
             }
             None => {
-                assert!(!self.candidates.is_empty(), "No candidates found.");
+                if self.candidates.is_empty() {
+                    return None;
+                }
+
                 let mut best_index = 0;
                 let (mut best_cost, _) = self.costs[0];
 
@@ -284,7 +287,7 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
                     }
                 }
 
-                &self.candidates[best_index]
+                Some(&self.candidates[best_index])
             }
         }
     }
@@ -561,10 +564,16 @@ impl<W: BeamWidthSuggester> BeamSearch<W> {
             }
         }
 
-        let best_candidate = selector.calculate_best_candidate();
-        let mut actions = tree.restore_path(best_candidate.parent_id);
-        actions.push(best_candidate.action.clone());
-        Ok(actions)
+        match selector.calculate_best_candidate() {
+            None => Err(BeamError::NoCandidates(NoCandidatesError::new(
+                self.max_turn,
+            ))),
+            Some(best_cand) => {
+                let mut actions = tree.restore_path(best_cand.parent_id);
+                actions.push(best_cand.action.clone());
+                Ok(actions)
+            }
+        }
     }
 }
 
@@ -580,7 +589,7 @@ pub trait BeamCallback {
         &mut self,
         turn: usize,
         canidates: &[BeamCallbackCandidate<Self::State>],
-        best_candidate: &BeamCallbackCandidate<Self::State>,
+        best_candidate: Option<&BeamCallbackCandidate<Self::State>>,
     );
 
     fn on_turn_end(&mut self, turn: usize);
@@ -618,10 +627,18 @@ impl<S: State> BeamCallback for DefaultBeamCallback<S> {
         &mut self,
         _turn: usize,
         _canidates: &[BeamCallbackCandidate<Self::State>],
-        best_candidate: &BeamCallbackCandidate<Self::State>,
+        best_candidate: Option<&BeamCallbackCandidate<Self::State>>,
     ) {
-        let best_score = best_candidate.evaluator.evaluate();
-        eprintln!("best score = {best_score}");
+        match best_candidate {
+            None => {
+                eprintln!("No candidates found.");
+                return;
+            }
+            Some(best_candidate) => {
+                let best_score = best_candidate.evaluator.evaluate();
+                eprintln!("best score = {best_score}");
+            }
+        }
     }
 
     fn on_turn_end(&mut self, _turn: usize) {
