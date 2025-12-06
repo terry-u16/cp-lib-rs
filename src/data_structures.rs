@@ -111,92 +111,111 @@ impl FastClearArray {
 /// use cp_lib_rs::data_structures::DisjointSparseTable;
 ///
 /// let v = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
-/// let dst = DisjointSparseTable::<Additive<_>>::new(&v);
+/// let dst = DisjointSparseTable::<Additive<_>>::new(v);
 ///
 /// assert_eq!(dst.prod(0..3), 8);
 /// ```
 #[derive(Debug, Clone)]
 pub struct DisjointSparseTable<M: Monoid> {
     n: usize,
+    /// 元配列（1要素区間クエリ用）
+    original: Vec<M::S>,
+    /// 各レベルのテーブル data[level][i]
     data: Vec<Vec<M::S>>,
 }
 
 impl<M: Monoid> DisjointSparseTable<M> {
-    pub fn new(v: &[M::S]) -> Self {
-        let n = v.len();
-        let ceil_n = 1 << ((n - 1).ilog2() + 1);
-        let mut data = vec![];
-        let mut v = v.to_vec();
-        v.resize(ceil_n, M::identity());
+    pub fn new(data: Vec<M::S>) -> Self {
+        let mut original = data;
+        let n = original.len();
 
-        let mut double_len = 2;
-        let mut len = double_len >> 1;
+        // 長さ0は空テーブルにしておく
+        if n == 0 {
+            return Self {
+                n,
+                original,
+                data: Vec::new(),
+            };
+        }
+
+        // 2 の冪に丸める（padding は identity）
+        let ceil_n = n.next_power_of_two();
+        original.resize(ceil_n, M::identity());
+
+        let mut data: Vec<Vec<M::S>> = Vec::new();
+
+        let mut double_len = 2_usize; // ブロック長 (2^1, 2^2, ...)
+        let mut len = 1_usize; // half = double_len / 2
 
         while double_len <= ceil_n {
-            let mut data_k = vec![M::identity(); ceil_n];
+            let mut level = vec![M::identity(); ceil_n];
 
-            for center in (len..n).step_by(double_len) {
-                // 左側
-                data_k[center - 1] = v[center - 1].clone();
-
+            // center はブロックの真ん中。
+            // [center - len, center) が左半分
+            // [center, center + len) が右半分
+            for center in (len..ceil_n).step_by(double_len) {
+                // 左側: i = center - 1 から center - len まで逆順で累積
+                level[center - 1] = original[center - 1].clone();
                 for i in (center - len..center - 1).rev() {
-                    data_k[i] = M::binary_operation(&v[i], &data_k[i + 1]);
+                    level[i] = M::binary_operation(&original[i], &level[i + 1]);
                 }
 
-                // 右側
-                data_k[center] = v[center].clone();
-
-                for i in center + 1..center + len {
-                    data_k[i] = M::binary_operation(&v[i], &data_k[i - 1]);
+                // 右側: i = center から center + len - 1 まで順方向で累積
+                level[center] = original[center].clone();
+                for i in center + 1..(center + len).min(ceil_n) {
+                    // 非可換モノイドを想定してマージ順に注意する
+                    level[i] = M::binary_operation(&level[i - 1], &original[i]);
                 }
             }
 
-            data.push(data_k);
+            data.push(level);
             double_len <<= 1;
             len <<= 1;
         }
 
-        Self { n, data }
+        Self { n, original, data }
     }
 
     pub fn prod(&self, range: impl RangeBounds<usize>) -> M::S {
-        let (l, r) = as_half_open_range(range, self.n);
-
+        let (l, mut r) = as_half_open_range(range, self.n);
         assert!(l <= r && r <= self.n);
 
-        if r - l == 0 {
+        let len = r - l;
+        if len == 0 {
             return M::identity();
-        } else if r - l == 1 {
-            return self.data[0][l].clone();
+        }
+        if len == 1 {
+            // 1要素区間は元配列から
+            return self.original[l].clone();
         }
 
-        // 閉区間にする
-        let r = r - 1;
+        // [l, r) → [l, r-1] の閉区間に変換
+        r -= 1;
 
-        // MSB (Most Significant Bit) の取得
+        // l と r の MSB が初めて違うビットの位置をレベルとして使う
         let k = (l ^ r).ilog2() as usize;
+        let level = &self.data[k];
 
-        M::binary_operation(&self.data[k][l], &self.data[k][r])
+        M::binary_operation(&level[l], &level[r])
     }
 }
 
+/// 与えられた RangeBounds を [l, r) の半開区間に正規化する
 fn as_half_open_range(range: impl RangeBounds<usize>, n: usize) -> (usize, usize) {
-    // 半開区間で受け取る
     let l = match range.start_bound() {
-        Bound::Included(l) => *l,
-        Bound::Excluded(l) => l + 1,
+        Bound::Included(&l) => l,
+        Bound::Excluded(&l) => l + 1,
         Bound::Unbounded => 0,
     };
 
     let r = match range.end_bound() {
-        Bound::Included(r) => r + 1,
-        Bound::Excluded(r) => *r,
+        Bound::Included(&r) => r + 1,
+        Bound::Excluded(&r) => r,
         Bound::Unbounded => n,
     };
 
     (l, r)
 }
-
 /// 座標圧縮を行う構造体
 ///
 /// # Examples
@@ -944,7 +963,7 @@ mod test {
     fn dst_add() {
         let v = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
         let n = v.len();
-        let dst = DisjointSparseTable::<Additive<_>>::new(&v);
+        let dst = DisjointSparseTable::<Additive<_>>::new(v.clone());
 
         for l in 0..=n {
             for r in l..=n {
