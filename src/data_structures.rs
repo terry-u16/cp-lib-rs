@@ -53,7 +53,7 @@ impl IndexSet {
         self.values.len()
     }
 
-    pub fn iter(&self) -> Iter<usize> {
+    pub fn iter(&'_ self) -> Iter<'_, usize> {
         self.values.iter()
     }
 
