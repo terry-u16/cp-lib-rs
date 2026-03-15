@@ -2,7 +2,7 @@ use ac_library::Monoid;
 use itertools::Itertools;
 use rand::prelude::*;
 use rand::rng;
-use std::ops::Index;
+use std::ops::{Index, IndexMut};
 use std::{
     ops::{Bound, RangeBounds},
     slice::Iter,
@@ -902,6 +902,386 @@ impl<T> Queue<T> {
     }
 }
 
+/// Implicit Treap
+///
+/// 配列を平衡二分木として保持し、ランダムアクセスや区間操作を O(log N) で扱う。
+///
+/// # Examples
+///
+/// ```
+/// use cp_lib_rs::data_structures::ImplicitTreap;
+///
+/// let mut treap = ImplicitTreap::from_iter([1, 2, 3, 4]);
+/// treap.insert(2, 10);
+/// treap.reverse(1..4);
+/// treap.rotate_left(1..5, 2);
+///
+/// assert_eq!(treap.into_vec(), vec![1, 2, 4, 3, 10]);
+/// ```
+#[derive(Debug, Clone)]
+pub struct ImplicitTreap<T> {
+    root: Option<Box<ImplicitTreapNode<T>>>,
+    random_state: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ImplicitTreapNode<T> {
+    value: T,
+    priority: u64,
+    /// 部分木サイズ。implicit index の計算に使う。
+    len: usize,
+    /// この部分木全体を反転する遅延フラグ。
+    rev: bool,
+    left: Option<Box<ImplicitTreapNode<T>>>,
+    right: Option<Box<ImplicitTreapNode<T>>>,
+}
+
+impl<T> Default for ImplicitTreap<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> ImplicitTreap<T> {
+    /// 空の treap を作る。
+    pub fn new() -> Self {
+        Self {
+            root: None,
+            random_state: rng().random(),
+        }
+    }
+
+    /// 要素数を返す。
+    pub fn len(&self) -> usize {
+        ImplicitTreapNode::len(&self.root)
+    }
+
+    /// 空なら true を返す。
+    pub fn is_empty(&self) -> bool {
+        self.root.is_none()
+    }
+
+    /// `index` 番目の要素への参照を返す。
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.root.as_ref()?.get(index, false)
+    }
+
+    /// `index` 番目の要素への可変参照を返す。
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        if index >= self.len() {
+            return None;
+        }
+
+        self.root.as_mut()?.get_mut(index)
+    }
+
+    /// 末尾に要素を追加する。
+    pub fn push_back(&mut self, value: T) {
+        let node = Some(Box::new(ImplicitTreapNode::new(
+            value,
+            self.next_priority(),
+        )));
+        self.root = ImplicitTreapNode::merge(self.root.take(), node);
+    }
+
+    /// 先頭に要素を追加する。
+    pub fn push_front(&mut self, value: T) {
+        let node = Some(Box::new(ImplicitTreapNode::new(
+            value,
+            self.next_priority(),
+        )));
+        self.root = ImplicitTreapNode::merge(node, self.root.take());
+    }
+
+    /// 末尾の要素を削除して返す。
+    pub fn pop_back(&mut self) -> Option<T> {
+        self.remove(self.len().checked_sub(1)?)
+    }
+
+    /// 先頭の要素を削除して返す。
+    pub fn pop_front(&mut self) -> Option<T> {
+        self.remove(0)
+    }
+
+    /// `index` の位置に要素を挿入する。
+    pub fn insert(&mut self, index: usize, value: T) {
+        assert!(index <= self.len());
+
+        // [0, index), [index, n) に分けて 1 ノードだけ挟む。
+        let (left, right) = ImplicitTreapNode::split(self.root.take(), index);
+        let middle = Some(Box::new(ImplicitTreapNode::new(
+            value,
+            self.next_priority(),
+        )));
+        self.root = ImplicitTreapNode::merge(ImplicitTreapNode::merge(left, middle), right);
+    }
+
+    /// `index` 番目の要素を削除して返す。
+    pub fn remove(&mut self, index: usize) -> Option<T> {
+        if index >= self.len() {
+            return None;
+        }
+
+        let (left, right) = ImplicitTreapNode::split(self.root.take(), index);
+        let (middle, right) = ImplicitTreapNode::split(right, 1);
+        self.root = ImplicitTreapNode::merge(left, right);
+        middle.map(|node| node.value)
+    }
+
+    /// 先頭 `index` 個と残りに分割する。
+    pub fn split(mut self, index: usize) -> (Self, Self) {
+        assert!(index <= self.len());
+
+        let (left, right) = ImplicitTreapNode::split(self.root.take(), index);
+
+        (
+            Self {
+                root: left,
+                random_state: self.random_state,
+            },
+            Self {
+                root: right,
+                // split 後の 2 本が同じ priority 列を生成しないよう右側の状態をずらす。
+                // この定数自体に強い意味はなく、既知の 64-bit 定数を便宜的に使っている。
+                random_state: self.random_state ^ 0x9e37_79b9_7f4a_7c15,
+            },
+        )
+    }
+
+    /// 左右 2 つの treap を連結する。
+    pub fn merge(mut left: Self, mut right: Self) -> Self {
+        Self {
+            root: ImplicitTreapNode::merge(left.root.take(), right.root.take()),
+            random_state: left.random_state ^ right.random_state.rotate_left(7),
+        }
+    }
+
+    /// 区間 `[l, r)` を反転する。
+    pub fn reverse(&mut self, range: impl RangeBounds<usize>) {
+        let (l, r) = as_half_open_range(range, self.len());
+        assert!(l <= r && r <= self.len());
+
+        // 対象区間だけ切り出して遅延反転フラグを立てる。
+        let (left, middle_right) = ImplicitTreapNode::split(self.root.take(), l);
+        let (mut middle, right) = ImplicitTreapNode::split(middle_right, r - l);
+        ImplicitTreapNode::toggle_rev_subtree(&mut middle);
+        self.root = ImplicitTreapNode::merge(ImplicitTreapNode::merge(left, middle), right);
+    }
+
+    /// 区間 `[l, r)` を左に `k` 回巡回シフトする。
+    pub fn rotate_left(&mut self, range: impl RangeBounds<usize>, k: usize) {
+        let (l, r) = as_half_open_range(range, self.len());
+        assert!(l <= r && r <= self.len());
+
+        let (left, middle_right) = ImplicitTreapNode::split(self.root.take(), l);
+        let (middle, right) = ImplicitTreapNode::split(middle_right, r - l);
+        let len = ImplicitTreapNode::len(&middle);
+
+        let middle = if len == 0 {
+            middle
+        } else {
+            let k = k % len;
+            // [a, b) を [b, a) に並べ替えて rotate を実現する。
+            let (first, second) = ImplicitTreapNode::split(middle, k);
+            ImplicitTreapNode::merge(second, first)
+        };
+
+        self.root = ImplicitTreapNode::merge(ImplicitTreapNode::merge(left, middle), right);
+    }
+
+    /// 区間 `[l, r)` を右に `k` 回巡回シフトする。
+    pub fn rotate_right(&mut self, range: impl RangeBounds<usize>, k: usize) {
+        let (l, r) = as_half_open_range(range, self.len());
+        assert!(l <= r && r <= self.len());
+
+        let len = r - l;
+        if len == 0 {
+            return;
+        }
+
+        self.rotate_left(l..r, len - (k % len));
+    }
+
+    /// 中身を順序付きの `Vec` として取り出す。
+    pub fn into_vec(mut self) -> Vec<T> {
+        let mut values = Vec::with_capacity(self.len());
+        if let Some(node) = self.root.take() {
+            node.into_vec(&mut values);
+        }
+        values
+    }
+
+    fn next_priority(&mut self) -> u64 {
+        // SplitMix64。treap の priority 用に十分速くて偏りが少ない。
+        // 0x9e37_79b9_7f4a_7c15 は 64-bit の黄金比由来の加算定数。
+        self.random_state = self.random_state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.random_state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+}
+
+impl<T> Index<usize> for ImplicitTreap<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.get(index).unwrap()
+    }
+}
+
+impl<T> IndexMut<usize> for ImplicitTreap<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        self.get_mut(index).unwrap()
+    }
+}
+
+impl<T> FromIterator<T> for ImplicitTreap<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut treap = Self::new();
+        for value in iter {
+            treap.push_back(value);
+        }
+        treap
+    }
+}
+
+impl<T> ImplicitTreapNode<T> {
+    fn new(value: T, priority: u64) -> Self {
+        Self {
+            value,
+            priority,
+            len: 1,
+            rev: false,
+            left: None,
+            right: None,
+        }
+    }
+
+    fn len(node: &Option<Box<Self>>) -> usize {
+        node.as_ref().map_or(0, |node| node.len)
+    }
+
+    fn update(&mut self) {
+        self.len = 1 + Self::len(&self.left) + Self::len(&self.right);
+    }
+
+    fn toggle_rev(&mut self) {
+        self.rev ^= true;
+    }
+
+    fn toggle_rev_subtree(node: &mut Option<Box<Self>>) {
+        if let Some(node) = node {
+            node.toggle_rev();
+        }
+    }
+
+    fn push(&mut self) {
+        if !self.rev {
+            return;
+        }
+
+        // 反転は「左右の子を入れ替え、子にも反転フラグを伝播」で処理する。
+        self.rev = false;
+        std::mem::swap(&mut self.left, &mut self.right);
+        Self::toggle_rev_subtree(&mut self.left);
+        Self::toggle_rev_subtree(&mut self.right);
+    }
+
+    fn split(root: Option<Box<Self>>, left_len: usize) -> (Option<Box<Self>>, Option<Box<Self>>) {
+        match root {
+            None => (None, None),
+            Some(mut node) => {
+                node.push();
+                let node_left_len = Self::len(&node.left);
+
+                // 左部分木サイズを implicit index とみなして分割位置を決める。
+                if left_len <= node_left_len {
+                    let (left, new_left) = Self::split(node.left.take(), left_len);
+                    node.left = new_left;
+                    node.update();
+                    (left, Some(node))
+                } else {
+                    let (new_right, right) =
+                        Self::split(node.right.take(), left_len - node_left_len - 1);
+                    node.right = new_right;
+                    node.update();
+                    (Some(node), right)
+                }
+            }
+        }
+    }
+
+    fn merge(left: Option<Box<Self>>, right: Option<Box<Self>>) -> Option<Box<Self>> {
+        match (left, right) {
+            (None, right) => right,
+            (left, None) => left,
+            (Some(mut left), Some(mut right)) => {
+                // heap 条件を priority で保ちながら左右を繋ぎ直す。
+                if left.priority > right.priority {
+                    left.push();
+                    left.right = Self::merge(left.right.take(), Some(right));
+                    left.update();
+                    Some(left)
+                } else {
+                    right.push();
+                    right.left = Self::merge(Some(left), right.left.take());
+                    right.update();
+                    Some(right)
+                }
+            }
+        }
+    }
+
+    fn get(&self, index: usize, reversed: bool) -> Option<&T> {
+        let reversed = reversed ^ self.rev;
+        // 祖先から見た反転状態だけを引き回せば、不変参照のまま辿れる。
+        let left_len = if reversed {
+            Self::len(&self.right)
+        } else {
+            Self::len(&self.left)
+        };
+
+        if index < left_len {
+            if reversed {
+                self.right.as_ref()?.get(index, reversed)
+            } else {
+                self.left.as_ref()?.get(index, reversed)
+            }
+        } else if index == left_len {
+            Some(&self.value)
+        } else if reversed {
+            self.left.as_ref()?.get(index - left_len - 1, reversed)
+        } else {
+            self.right.as_ref()?.get(index - left_len - 1, reversed)
+        }
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.push();
+        let left_len = Self::len(&self.left);
+
+        if index < left_len {
+            self.left.as_mut()?.get_mut(index)
+        } else if index == left_len {
+            Some(&mut self.value)
+        } else {
+            self.right.as_mut()?.get_mut(index - left_len - 1)
+        }
+    }
+
+    fn into_vec(mut self: Box<Self>, values: &mut Vec<T>) {
+        self.push();
+        if let Some(left) = self.left.take() {
+            left.into_vec(values);
+        }
+        values.push(self.value);
+        if let Some(right) = self.right.take() {
+            right.into_vec(values);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -994,5 +1374,88 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn implicit_treap_basic_operations() {
+        let mut treap = ImplicitTreap::new();
+        assert!(treap.is_empty());
+
+        treap.push_back(2);
+        treap.push_front(1);
+        treap.push_back(4);
+        treap.insert(2, 3);
+        assert_eq!(treap.len(), 4);
+        assert_eq!(treap[0], 1);
+        assert_eq!(treap[3], 4);
+
+        *treap.get_mut(1).unwrap() = 10;
+        assert_eq!(treap.remove(1), Some(10));
+        assert_eq!(treap.pop_front(), Some(1));
+        assert_eq!(treap.pop_back(), Some(4));
+        assert_eq!(treap.into_vec(), vec![3]);
+    }
+
+    #[test]
+    fn implicit_treap_index_mut() {
+        let mut treap = ImplicitTreap::from_iter([1, 2, 3]);
+        treap[1] = 10;
+        assert_eq!(treap.into_vec(), vec![1, 10, 3]);
+    }
+
+    #[test]
+    fn implicit_treap_split_merge_reverse_rotate() {
+        let mut treap = ImplicitTreap::from_iter(0..8);
+        treap.reverse(2..7);
+        assert_eq!(treap.clone().into_vec(), vec![0, 1, 6, 5, 4, 3, 2, 7]);
+
+        treap.rotate_left(1..7, 2);
+        assert_eq!(treap.clone().into_vec(), vec![0, 5, 4, 3, 2, 1, 6, 7]);
+
+        treap.rotate_right(1..7, 3);
+        assert_eq!(treap.clone().into_vec(), vec![0, 2, 1, 6, 5, 4, 3, 7]);
+
+        let (left, right) = treap.split(3);
+        assert_eq!(left.into_vec(), vec![0, 2, 1]);
+        assert_eq!(right.clone().into_vec(), vec![6, 5, 4, 3, 7]);
+
+        let merged = ImplicitTreap::merge(ImplicitTreap::from_iter([0, 1]), right);
+        assert_eq!(merged.into_vec(), vec![0, 1, 6, 5, 4, 3, 7]);
+    }
+
+    #[test]
+    fn implicit_treap_matches_vec() {
+        let mut treap = ImplicitTreap::new();
+        let mut vec = Vec::new();
+
+        for i in 0..20 {
+            if i % 2 == 0 {
+                treap.push_back(i);
+                vec.push(i);
+            } else {
+                treap.push_front(i);
+                vec.insert(0, i);
+            }
+        }
+
+        treap.insert(5, 100);
+        vec.insert(5, 100);
+        treap.insert(vec.len(), 200);
+        vec.push(200);
+
+        treap.reverse(3..15);
+        vec[3..15].reverse();
+        treap.rotate_left(2..18, 5);
+        vec[2..18].rotate_left(5);
+        treap.rotate_right(.., 7);
+        vec.rotate_right(7);
+
+        assert_eq!(treap.clone().into_vec(), vec);
+
+        for i in (0..5).rev() {
+            assert_eq!(treap.remove(i * 3), Some(vec.remove(i * 3)));
+        }
+
+        assert_eq!(treap.into_vec(), vec);
     }
 }
