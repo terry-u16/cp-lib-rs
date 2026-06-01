@@ -840,7 +840,7 @@ impl<S: State> BeamCallback for DefaultBeamCallback<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::beam::common::FixedBeamWidthSuggester;
+    use crate::beam::common::{BeamWidthSuggester, FixedBeamWidthSuggester};
 
     #[derive(Clone, Default, Eq, PartialEq, Debug)]
     enum TestAction {
@@ -851,13 +851,60 @@ mod tests {
         Goal,
     }
 
+    #[derive(Clone, Default, Eq, PartialEq, Debug)]
+    enum VariableWidthAction {
+        #[default]
+        Root,
+        A,
+        B,
+        Goal,
+    }
+
     struct TestState;
+
+    struct VariableWidthState;
 
     #[derive(Clone)]
     struct TestEvaluator(i32);
 
+    struct VariableBeamWidthSuggester {
+        widths: Vec<usize>,
+        index: usize,
+        max_width: usize,
+    }
+
+    impl VariableBeamWidthSuggester {
+        fn new(widths: Vec<usize>, max_width: usize) -> Self {
+            Self {
+                widths,
+                index: 0,
+                max_width,
+            }
+        }
+    }
+
+    impl BeamWidthSuggester for VariableBeamWidthSuggester {
+        fn suggest(&mut self) -> usize {
+            let width = self.widths[self.index];
+            self.index += 1;
+            width
+        }
+
+        fn max_width(&self) -> usize {
+            self.max_width
+        }
+    }
+
     impl Action for TestAction {
         type State = TestState;
+
+        fn apply(&self, _state: &mut Self::State) {}
+
+        fn rollback(&self, _state: &mut Self::State) {}
+    }
+
+    impl Action for VariableWidthAction {
+        type State = VariableWidthState;
 
         fn apply(&self, _state: &mut Self::State) {}
 
@@ -898,6 +945,38 @@ mod tests {
                 }
                 1 => {
                     candidate_set.push(TestAction::Goal, TestEvaluator(-1), 3, true, 1);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl State for VariableWidthState {
+        type Evaluator = TestEvaluator;
+        type Hash = u64;
+        type Action = VariableWidthAction;
+
+        fn make_initial_node(&self) -> (Self::Evaluator, Self::Hash) {
+            (TestEvaluator(0), 0)
+        }
+
+        fn expand(
+            &mut self,
+            evaluator: &Self::Evaluator,
+            _hash: Self::Hash,
+            candidate_set: &mut impl CandidateSet<
+                Action = Self::Action,
+                Evaluator = Self::Evaluator,
+                Hash = Self::Hash,
+            >,
+        ) {
+            match evaluator.0 {
+                0 => {
+                    candidate_set.push(VariableWidthAction::A, TestEvaluator(1), 1, false, 1);
+                    candidate_set.push(VariableWidthAction::B, TestEvaluator(2), 2, false, 1);
+                }
+                2 => {
+                    candidate_set.push(VariableWidthAction::Goal, TestEvaluator(-1), 3, true, 1);
                 }
                 _ => {}
             }
@@ -946,5 +1025,13 @@ mod tests {
         let result = search.run(TestState, vec![]).unwrap();
 
         assert_eq!(result, vec![TestAction::A, TestAction::Goal]);
+    }
+
+    #[test]
+    fn multi_turn_respects_shrunk_beam_width_for_new_selectors() {
+        let search = BeamSearch::new(VariableBeamWidthSuggester::new(vec![1, 1], 2), 2);
+        let result = search.run(VariableWidthState, vec![]);
+
+        assert!(result.is_err());
     }
 }

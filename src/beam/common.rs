@@ -283,3 +283,19 @@ impl Display for BeamError {
 }
 
 impl Error for BeamError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bayesian_suggester_with_zero_warmup_keeps_distribution_finite_after_first_suggest() {
+        let mut suggester = BayesianBeamWidthSuggester::new(10, 0, 1.0, 10, 1, 100, None);
+
+        let beam_width = suggester.suggest();
+
+        assert!((1..=100).contains(&beam_width));
+        assert!(suggester.mean_sec.is_finite());
+        assert!(suggester.variance_sec.is_finite());
+    }
+}
