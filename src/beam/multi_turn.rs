@@ -218,7 +218,14 @@ impl<'a, A: Action, E: Evaluator, H: BeamHash> CandidateSet for CandidateSetImpl
 /// ビーム幅の個数だけ、評価がよいものを選ぶ
 /// ハッシュ値が一致したものについては、評価がよいほうのみを残す
 struct NodeSelector<A: Action, E: Evaluator, H: BeamHash> {
+    /// 実際に次のターンへ渡す候補数の上限。
     beam_width: usize,
+    /// セグ木上で保持する候補容量。beam_width以上の2冪を保つ。
+    ///
+    /// beam_widthの縮小に合わせてセグ木を縮めると、可変ビーム幅で毎ターン再構築が
+    /// 発生しやすい。そのため、Vecのcapacityと同じように内部容量は広めに維持し、
+    /// 実際に候補を列挙する直前だけbeam_width個に絞る。
+    segtree_width: usize,
     candidates: Vec<Candidate<A, E, H>>,
     hash_to_index: FxHashMap<H, usize>,
     costs: Vec<(E::Cost, usize)>,
@@ -228,12 +235,14 @@ struct NodeSelector<A: Action, E: Evaluator, H: BeamHash> {
 }
 
 impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
-    fn new(max_beam_width: usize) -> Self {
-        let candidates = Vec::with_capacity(max_beam_width);
-        let costs = Vec::with_capacity(max_beam_width);
+    fn new(beam_width: usize) -> Self {
+        let segtree_width = beam_width.next_power_of_two();
+        let candidates = Vec::with_capacity(segtree_width);
+        let costs = Vec::with_capacity(segtree_width);
 
         Self {
-            beam_width: max_beam_width,
+            beam_width,
+            segtree_width,
             candidates,
             hash_to_index: FxHashMap::default(),
             costs,
@@ -252,7 +261,7 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
 
         // 保持しているどの候補よりもコストが小さくないとき
         if let Some(segtree) = &self.cost_segtree {
-            if cost >= segtree.all_prod().0 {
+            if self.candidates.len() >= self.segtree_width && cost >= segtree.all_prod().0 {
                 return false;
             }
         }
@@ -291,12 +300,19 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
                 // セグ木が構築されているかで場合分け
                 match &mut self.cost_segtree {
                     Some(segtree) => {
-                        let index_c = segtree.all_prod().1;
-                        let old_hash = self.candidates[index_c].hash;
-                        entry.insert(index_c);
-                        self.hash_to_index.remove(&old_hash);
-                        self.candidates[index_c] = candidate;
-                        segtree.set(index_c, (cost, index_c));
+                        if self.candidates.len() < self.segtree_width {
+                            let index_c = self.candidates.len();
+                            entry.insert(index_c);
+                            self.candidates.push(candidate);
+                            segtree.set(index_c, (cost, index_c));
+                        } else {
+                            let index_c = segtree.all_prod().1;
+                            let old_hash = self.candidates[index_c].hash;
+                            entry.insert(index_c);
+                            self.hash_to_index.remove(&old_hash);
+                            self.candidates[index_c] = candidate;
+                            segtree.set(index_c, (cost, index_c));
+                        }
                     }
                     None => {
                         let index_c = self.candidates.len();
@@ -304,13 +320,9 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
                         self.candidates.push(candidate);
                         self.costs.push((cost, index_c));
 
-                        // 保持している候補がビーム幅分になったときにセグ木を構築する
-                        if self.costs.len() >= self.beam_width {
-                            // ビーム幅の変動に備え、少し多めに確保
-                            let mut costs = Vec::with_capacity(self.beam_width * 12 / 10);
-                            std::mem::swap(&mut self.costs, &mut costs);
-                            let segtree = Segtree::from(costs);
-                            self.cost_segtree = Some(segtree);
+                        // 保持している候補が内部容量分になったときにセグ木を構築する
+                        if self.costs.len() >= self.segtree_width {
+                            self.rebuild_segtree();
                         }
                     }
                 }
@@ -323,6 +335,16 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
     fn iter_candidates_and_clear<'a>(
         &'a mut self,
     ) -> impl Iterator<Item = Candidate<A, E, H>> + 'a {
+        // セグ木容量はbeam_widthより大きいことがあるため、木へ追加する直前にだけ
+        // 真のビーム幅まで候補を絞る。ホットパスのpushや幅変更時には縮小しない。
+        if self.candidates.len() > self.beam_width {
+            self.candidates
+                .select_nth_unstable_by_key(self.beam_width, |candidate| {
+                    candidate.evaluator.evaluate()
+                });
+            self.candidates.truncate(self.beam_width);
+        }
+
         self.costs.clear();
         self.hash_to_index.clear();
         self.cost_segtree = None;
@@ -330,25 +352,51 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
         self.candidates.drain(..)
     }
 
-    fn calculate_best_candidate(&self) -> Option<&Candidate<A, E, H>> {
-        match &self.cost_segtree {
-            Some(segtree) => (0..self.beam_width)
-                .min_by_key(|&i| segtree.get(i).0)
-                .map(|i| &self.candidates[i]),
-            None => (0..self.candidates.len())
-                .min_by_key(|&i| self.costs[i].0)
-                .map(|i| &self.candidates[i]),
+    fn rebuild_segtree(&mut self) {
+        let mut costs =
+            vec![<MaxCostIndex<E::Cost> as ac_library::Monoid>::identity(); self.segtree_width];
+        for (index, candidate) in self.candidates.iter().enumerate() {
+            costs[index] = (candidate.evaluator.evaluate(), index);
         }
+
+        self.costs.clear();
+        self.cost_segtree = Some(Segtree::from(costs));
+    }
+
+    fn calculate_best_candidate(&self) -> Option<&Candidate<A, E, H>> {
+        self.candidates
+            .iter()
+            .min_by_key(|candidate| candidate.evaluator.evaluate())
     }
 
     pub(super) fn set_beam_width(&mut self, beam_width: usize) {
+        if self.beam_width == beam_width {
+            return;
+        }
+
+        // 縮小時は内部容量を保ち、拡大時も現在の2冪容量に収まるなら再構築しない。
+        // 容量を超えたときだけ次の2冪へ拡張して、セグ木の深さを安定させる。
+        if beam_width > self.segtree_width {
+            self.segtree_width = beam_width.next_power_of_two();
+            self.candidates.reserve(
+                self.segtree_width
+                    .saturating_sub(self.candidates.capacity()),
+            );
+            self.costs
+                .reserve(self.segtree_width.saturating_sub(self.costs.capacity()));
+
+            if self.cost_segtree.is_some() {
+                self.rebuild_segtree();
+            }
+        }
+
         self.beam_width = beam_width;
     }
 }
 
 struct MultiSelector<A: Action, E: Evaluator, H: BeamHash> {
     max_step: usize,
-    max_beam_width: usize,
+    beam_width: usize,
     selectors: VecDeque<NodeSelector<A, E, H>>,
 }
 
@@ -358,15 +406,21 @@ impl<A: Action, E: Evaluator, H: BeamHash> MultiSelector<A, E, H> {
 
         Self {
             max_step: 1,
-            max_beam_width,
+            beam_width: max_beam_width,
             selectors,
         }
     }
 
     fn push(&mut self, candidate: Candidate<A, E, H>, is_finished: bool, step: usize) {
+        // single_turnではselectorを毎ターン空にしてすぐ使い切るため、幅変更は
+        // 次のターンのpush前に反映すれば十分。
+        //
+        // multi_turnではturn_step>1の候補を未来ターン用selectorへ積むため、
+        // selectorが複数ターンにまたがって残る。可変ビーム幅では、その間に
+        // 真のbeam_widthだけが変わり得るので、内部セグ木容量を別に持って
+        // 必要なときだけ拡張する。
         while self.selectors.len() < step + 1 {
-            self.selectors
-                .push_back(NodeSelector::new(self.max_beam_width));
+            self.selectors.push_back(NodeSelector::new(self.beam_width));
         }
 
         if self.selectors[step - 1].push(candidate, is_finished) {
@@ -388,6 +442,8 @@ impl<A: Action, E: Evaluator, H: BeamHash> MultiSelector<A, E, H> {
     }
 
     fn set_beam_width(&mut self, beam_width: usize) {
+        self.beam_width = beam_width;
+
         for selector in &mut self.selectors {
             selector.set_beam_width(beam_width);
         }
@@ -1033,5 +1089,49 @@ mod tests {
         let result = search.run(VariableWidthState, vec![]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn node_selector_keeps_power_of_two_capacity_and_prunes_on_drain() {
+        let mut selector: NodeSelector<TestAction, TestEvaluator, u64> = NodeSelector::new(3);
+        assert_eq!(selector.segtree_width, 4);
+
+        for (cost, hash) in [(10, 10), (20, 20), (30, 30), (40, 40)] {
+            selector.push(
+                Candidate::new(
+                    TestAction::Root,
+                    TestEvaluator(cost),
+                    hash,
+                    ObjectPoolIndex::NONE,
+                ),
+                false,
+            );
+        }
+
+        selector.set_beam_width(5);
+        assert_eq!(selector.segtree_width, 8);
+
+        selector.push(
+            Candidate::new(
+                TestAction::Root,
+                TestEvaluator(0),
+                50,
+                ObjectPoolIndex::NONE,
+            ),
+            false,
+        );
+        assert_eq!(selector.candidates.len(), 5);
+
+        selector.set_beam_width(2);
+        assert_eq!(selector.segtree_width, 8);
+        assert_eq!(selector.candidates.len(), 5);
+
+        let mut costs = selector
+            .iter_candidates_and_clear()
+            .map(|candidate| candidate.evaluator().evaluate())
+            .collect::<Vec<_>>();
+        costs.sort();
+
+        assert_eq!(costs, vec![0, 10]);
     }
 }

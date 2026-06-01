@@ -252,7 +252,19 @@ where
     }
 
     fn binary_operation(a: &Self::S, b: &Self::S) -> Self::S {
-        if a.0 >= b.0 { *a } else { *b }
+        // multi_turnではセグ木容量を2冪で広めに取り、空きslotをidentityで埋める。
+        // 実候補のコストがmin_value()のときでも空きslot(index == !0)を選ばない。
+        match (a.1 == !0, b.1 == !0) {
+            (true, _) => *b,
+            (_, true) => *a,
+            _ => {
+                if a.0 >= b.0 {
+                    *a
+                } else {
+                    *b
+                }
+            }
+        }
     }
 }
 
