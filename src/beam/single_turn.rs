@@ -219,7 +219,9 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
                 match &mut self.cost_segtree {
                     Some(segtree) => {
                         let index_c = segtree.all_prod().1;
+                        let old_hash = self.candidates[index_c].hash;
                         vacant_entry.insert(index_c);
+                        self.hash_to_index.remove(&old_hash);
                         self.candidates[index_c] = candidate;
                         segtree.set(index_c, (cost, index_c));
                     }
@@ -645,5 +647,82 @@ impl<S: State> BeamCallback for DefaultBeamCallback<S> {
         eprintln!("elapsed = {:?}", self.since_turn.elapsed());
         eprintln!("total elapsed = {:?}", self.since.elapsed());
         eprintln!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Eq, PartialEq)]
+    struct TestAction;
+
+    struct TestState;
+
+    #[derive(Clone)]
+    struct TestEvaluator(i32);
+
+    impl Action for TestAction {
+        type State = TestState;
+
+        fn apply(&self, _state: &mut Self::State) {}
+
+        fn rollback(&self, _state: &mut Self::State) {}
+    }
+
+    impl Evaluator for TestEvaluator {
+        type Cost = i32;
+
+        fn evaluate(&self) -> Self::Cost {
+            self.0
+        }
+    }
+
+    impl State for TestState {
+        type Evaluator = TestEvaluator;
+        type Hash = u64;
+        type Action = TestAction;
+
+        fn make_initial_node(&self) -> (Self::Evaluator, Self::Hash) {
+            (TestEvaluator(0), 0)
+        }
+
+        fn expand(
+            &mut self,
+            _evaluator: &Self::Evaluator,
+            _hash: Self::Hash,
+            _candidate_set: &mut impl CandidateSet<
+                Action = Self::Action,
+                Evaluator = Self::Evaluator,
+                Hash = Self::Hash,
+            >,
+        ) {
+        }
+    }
+
+    #[test]
+    fn node_selector_removes_stale_hash_when_replacing_worst_candidate() {
+        let mut selector: NodeSelector<TestAction, TestEvaluator, u64> = NodeSelector::new(2);
+
+        selector.push(
+            Candidate::new(TestAction, TestEvaluator(10), 1, ParentId(0)),
+            false,
+        );
+        selector.push(
+            Candidate::new(TestAction, TestEvaluator(20), 2, ParentId(0)),
+            false,
+        );
+        selector.push(
+            Candidate::new(TestAction, TestEvaluator(5), 3, ParentId(0)),
+            false,
+        );
+        selector.push(
+            Candidate::new(TestAction, TestEvaluator(1), 2, ParentId(0)),
+            false,
+        );
+
+        let best = selector.calculate_best_candidate().unwrap();
+        assert_eq!(*best.hash(), 2);
+        assert_eq!(best.evaluator().evaluate(), 1);
     }
 }
