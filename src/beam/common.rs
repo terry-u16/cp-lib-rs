@@ -220,7 +220,7 @@ impl BeamWidthSuggester for BayesianBeamWidthSuggester {
             "規定ターン終了後にsuggest()が呼び出されました。"
         );
 
-        if self.current_turn >= self.warmup_turn {
+        if self.current_turn > 0 && self.current_turn >= self.warmup_turn {
             let elapsed = (Instant::now() - self.last_time).as_secs_f64();
             let elapsed_per_beam = elapsed / self.current_beam_width as f64;
             self.update_state();
