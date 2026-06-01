@@ -522,6 +522,10 @@ impl<W: BeamWidthSuggester> BeamSearch<W> {
 
         for turn in 0..self.max_turn {
             let beam_width = self.beam_width_suggester.suggest();
+            assert!(
+                beam_width > 0 && beam_width <= self.beam_width_suggester.max_width(),
+                "Beam width must be in 1..=max_width()."
+            );
 
             for callback in &mut callbacks {
                 callback.on_turn_start(turn, beam_width);
@@ -653,6 +657,7 @@ impl<S: State> BeamCallback for DefaultBeamCallback<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::beam::common::BeamWidthSuggester;
 
     #[derive(Clone, Eq, PartialEq)]
     struct TestAction;
@@ -661,6 +666,18 @@ mod tests {
 
     #[derive(Clone)]
     struct TestEvaluator(i32);
+
+    struct InvalidBeamWidthSuggester;
+
+    impl BeamWidthSuggester for InvalidBeamWidthSuggester {
+        fn suggest(&mut self) -> usize {
+            2
+        }
+
+        fn max_width(&self) -> usize {
+            1
+        }
+    }
 
     impl Action for TestAction {
         type State = TestState;
@@ -724,5 +741,12 @@ mod tests {
         let best = selector.calculate_best_candidate().unwrap();
         assert_eq!(*best.hash(), 2);
         assert_eq!(best.evaluator().evaluate(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Beam width must be in 1..=max_width().")]
+    fn beam_search_rejects_invalid_suggested_width() {
+        let search = BeamSearch::new(InvalidBeamWidthSuggester, 1);
+        let _ = search.run(TestState, vec![]);
     }
 }

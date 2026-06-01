@@ -767,6 +767,10 @@ impl<W: BeamWidthSuggester> BeamSearch<W> {
 
         for turn in 0..self.max_turn {
             let beam_width = self.beam_width_suggester.suggest();
+            assert!(
+                beam_width > 0 && beam_width <= self.beam_width_suggester.max_width(),
+                "Beam width must be in 1..=max_width()."
+            );
 
             for callback in &mut callbacks {
                 callback.on_turn_start(turn, beam_width);
@@ -929,6 +933,8 @@ mod tests {
         max_width: usize,
     }
 
+    struct InvalidBeamWidthSuggester;
+
     impl VariableBeamWidthSuggester {
         fn new(widths: Vec<usize>, max_width: usize) -> Self {
             Self {
@@ -948,6 +954,16 @@ mod tests {
 
         fn max_width(&self) -> usize {
             self.max_width
+        }
+    }
+
+    impl BeamWidthSuggester for InvalidBeamWidthSuggester {
+        fn suggest(&mut self) -> usize {
+            0
+        }
+
+        fn max_width(&self) -> usize {
+            1
         }
     }
 
@@ -1133,5 +1149,12 @@ mod tests {
         costs.sort();
 
         assert_eq!(costs, vec![0, 10]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Beam width must be in 1..=max_width().")]
+    fn beam_search_rejects_invalid_suggested_width() {
+        let search = BeamSearch::new(InvalidBeamWidthSuggester, 1);
+        let _ = search.run(TestState, vec![]);
     }
 }
