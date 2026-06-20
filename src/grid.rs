@@ -1,6 +1,6 @@
 use std::{
     fmt::Display,
-    ops::{Add, AddAssign, Index, IndexMut},
+    ops::{Add, AddAssign, Index, IndexMut, Neg},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -108,6 +108,35 @@ impl AddAssign<CoordDiff> for Coord {
     fn add_assign(&mut self, rhs: CoordDiff) {
         self.row = self.row.wrapping_add(rhs.dr as u8);
         self.col = self.col.wrapping_add(rhs.dc as u8);
+    }
+}
+
+impl Add<CoordDiff> for CoordDiff {
+    type Output = CoordDiff;
+
+    fn add(self, rhs: CoordDiff) -> Self::Output {
+        CoordDiff {
+            dr: self.dr + rhs.dr,
+            dc: self.dc + rhs.dc,
+        }
+    }
+}
+
+impl AddAssign<CoordDiff> for CoordDiff {
+    fn add_assign(&mut self, rhs: CoordDiff) {
+        self.dr += rhs.dr;
+        self.dc += rhs.dc;
+    }
+}
+
+impl Neg for CoordDiff {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            dr: -self.dr,
+            dc: -self.dc,
+        }
     }
 }
 
@@ -229,37 +258,43 @@ impl<T> IndexMut<CoordIndex> for Map2d<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConstMap2d<T, const N: usize> {
-    map: Vec<T>,
+pub struct ConstMap2d<T, const N: usize, const LEN: usize> {
+    map: [T; LEN],
 }
 
-impl<T, const N: usize> ConstMap2d<T, N> {
+impl<T, const N: usize, const LEN: usize> ConstMap2d<T, N, LEN> {
     pub fn new(map: Vec<T>) -> Self {
-        assert_eq!(map.len(), N * N);
+        assert_eq!(LEN, N * N);
+        assert_eq!(map.len(), LEN);
+        let Ok(map) = map.try_into() else {
+            unreachable!("長さ検証済みのVecから配列への変換に失敗しました。");
+        };
+
         Self { map }
     }
 
     pub fn from_fn(mut f: impl FnMut(Coord) -> T) -> Self {
-        let mut map = Vec::with_capacity(N * N);
-
-        for row in 0..N {
-            for col in 0..N {
-                map.push(f(Coord::new(row, col)));
-            }
-        }
+        assert_eq!(LEN, N * N);
+        let map = std::array::from_fn(|index| f(Coord::new(index / N, index % N)));
 
         Self { map }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.map.iter()
+    }
 }
 
-impl<T: Default + Clone, const N: usize> ConstMap2d<T, N> {
+impl<T: Default, const N: usize, const LEN: usize> ConstMap2d<T, N, LEN> {
     pub fn with_default() -> Self {
-        let map = vec![T::default(); N * N];
+        assert_eq!(LEN, N * N);
+        let map = std::array::from_fn(|_| T::default());
+
         Self { map }
     }
 }
 
-impl<T, const N: usize> Index<Coord> for ConstMap2d<T, N> {
+impl<T, const N: usize, const LEN: usize> Index<Coord> for ConstMap2d<T, N, LEN> {
     type Output = T;
 
     #[inline]
@@ -268,14 +303,14 @@ impl<T, const N: usize> Index<Coord> for ConstMap2d<T, N> {
     }
 }
 
-impl<T, const N: usize> IndexMut<Coord> for ConstMap2d<T, N> {
+impl<T, const N: usize, const LEN: usize> IndexMut<Coord> for ConstMap2d<T, N, LEN> {
     #[inline]
     fn index_mut(&mut self, coordinate: Coord) -> &mut Self::Output {
         &mut self.map[coordinate.to_index(N).0]
     }
 }
 
-impl<T, const N: usize> Index<&Coord> for ConstMap2d<T, N> {
+impl<T, const N: usize, const LEN: usize> Index<&Coord> for ConstMap2d<T, N, LEN> {
     type Output = T;
 
     #[inline]
@@ -284,14 +319,14 @@ impl<T, const N: usize> Index<&Coord> for ConstMap2d<T, N> {
     }
 }
 
-impl<T, const N: usize> IndexMut<&Coord> for ConstMap2d<T, N> {
+impl<T, const N: usize, const LEN: usize> IndexMut<&Coord> for ConstMap2d<T, N, LEN> {
     #[inline]
     fn index_mut(&mut self, coordinate: &Coord) -> &mut Self::Output {
         &mut self.map[coordinate.to_index(N).0]
     }
 }
 
-impl<T, const N: usize> Index<usize> for ConstMap2d<T, N> {
+impl<T, const N: usize, const LEN: usize> Index<usize> for ConstMap2d<T, N, LEN> {
     type Output = [T];
 
     #[inline]
@@ -302,7 +337,7 @@ impl<T, const N: usize> Index<usize> for ConstMap2d<T, N> {
     }
 }
 
-impl<T, const N: usize> IndexMut<usize> for ConstMap2d<T, N> {
+impl<T, const N: usize, const LEN: usize> IndexMut<usize> for ConstMap2d<T, N, LEN> {
     #[inline]
     fn index_mut(&mut self, row: usize) -> &mut Self::Output {
         let begin = row * N;
@@ -311,7 +346,7 @@ impl<T, const N: usize> IndexMut<usize> for ConstMap2d<T, N> {
     }
 }
 
-impl<T, const N: usize> Index<CoordIndex> for ConstMap2d<T, N> {
+impl<T, const N: usize, const LEN: usize> Index<CoordIndex> for ConstMap2d<T, N, LEN> {
     type Output = T;
 
     #[inline]
@@ -320,7 +355,7 @@ impl<T, const N: usize> Index<CoordIndex> for ConstMap2d<T, N> {
     }
 }
 
-impl<T, const N: usize> IndexMut<CoordIndex> for ConstMap2d<T, N> {
+impl<T, const N: usize, const LEN: usize> IndexMut<CoordIndex> for ConstMap2d<T, N, LEN> {
     #[inline]
     fn index_mut(&mut self, index: CoordIndex) -> &mut Self::Output {
         &mut self.map[index.0]
@@ -369,7 +404,7 @@ mod test {
 
     #[test]
     fn const_map_new() {
-        let map = ConstMap2d::<_, 2>::new(vec![0, 1, 2, 3]);
+        let map = ConstMap2d::<_, 2, 4>::new(vec![0, 1, 2, 3]);
         let actual = map[Coord::new(1, 0)];
         let expected = 2;
         assert_eq!(expected, actual);
@@ -377,7 +412,7 @@ mod test {
 
     #[test]
     fn const_map_default() {
-        let map = ConstMap2d::<_, 2>::with_default();
+        let map = ConstMap2d::<_, 2, 4>::with_default();
         let actual = map[Coord::new(1, 0)];
         let expected = 0;
         assert_eq!(expected, actual);
