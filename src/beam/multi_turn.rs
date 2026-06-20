@@ -460,6 +460,8 @@ struct Node<A: Action, E: Evaluator, H: BeamHash> {
     left: ObjectPoolIndex,
     right: ObjectPoolIndex,
     is_active: bool,
+    /// remove_queueに残っており、未来selectorからparent_idとして参照される可能性がある。
+    is_removal_reserved: bool,
 }
 
 impl<A: Action, E: Evaluator, H: BeamHash> Node<A, E, H> {
@@ -482,6 +484,7 @@ impl<A: Action, E: Evaluator, H: BeamHash> Node<A, E, H> {
             left: ObjectPoolIndex::NONE,
             right,
             is_active: true,
+            is_removal_reserved: false,
         }
     }
 
@@ -496,6 +499,7 @@ impl<A: Action, E: Evaluator, H: BeamHash> Node<A, E, H> {
             left: ObjectPoolIndex::NONE,
             right: ObjectPoolIndex::NONE,
             is_active: true,
+            is_removal_reserved: false,
         }
     }
 }
@@ -550,6 +554,7 @@ impl<S: State> BeamTree<S> {
                 self.remove_queue.push_back(vec![]);
             }
 
+            self.nodes[v].is_removal_reserved = true;
             self.remove_queue[selectors.max_step - 1].push(v);
 
             v = self.move_to_ancestor(v);
@@ -610,7 +615,10 @@ impl<S: State> BeamTree<S> {
     fn update_root(&mut self) {
         let mut child = self.nodes[self.root].child;
 
-        while child != ObjectPoolIndex::NONE && self.nodes[child].right == ObjectPoolIndex::NONE {
+        while !self.nodes[self.root].is_removal_reserved
+            && child != ObjectPoolIndex::NONE
+            && self.nodes[child].right == ObjectPoolIndex::NONE
+        {
             self.root = child;
             self.nodes[child].action.apply(&mut self.state);
             child = self.nodes[child].child;
@@ -670,6 +678,8 @@ impl<S: State> BeamTree<S> {
         let mut remove_queue = self.remove_queue.pop_front().unwrap();
 
         for v in remove_queue.drain(..) {
+            self.nodes[v].is_removal_reserved = false;
+
             if self.nodes[v].child == ObjectPoolIndex::NONE {
                 // 子がいないので消してOK
                 self.remove_leaf(v, turn)?;
@@ -685,6 +695,11 @@ impl<S: State> BeamTree<S> {
     /// 不要になった葉を再帰的に削除する
     fn remove_leaf(&mut self, mut v: ObjectPoolIndex, turn: usize) -> Result<(), BeamError> {
         loop {
+            // 予約中の祖先は、まだ実体化していない未来候補の親になり得る。
+            if self.nodes[v].is_removal_reserved {
+                return Ok(());
+            }
+
             let left = self.nodes[v].left;
             let right = self.nodes[v].right;
 
@@ -920,9 +935,29 @@ mod tests {
         Goal,
     }
 
+    #[derive(Clone, Default, Eq, PartialEq, Debug)]
+    enum PendingFutureAction {
+        #[default]
+        Root,
+        Enter,
+        ShortDeadEnd,
+        FutureChild,
+        FutureGoal,
+        Finish,
+    }
+
     struct TestState;
 
     struct VariableWidthState;
+
+    struct PendingFutureState {
+        mode: PendingFutureMode,
+    }
+
+    enum PendingFutureMode {
+        FinishedCandidate,
+        NonFinishedCandidate,
+    }
 
     #[derive(Clone)]
     struct TestEvaluator(i32);
@@ -977,6 +1012,14 @@ mod tests {
 
     impl Action for VariableWidthAction {
         type State = VariableWidthState;
+
+        fn apply(&self, _state: &mut Self::State) {}
+
+        fn rollback(&self, _state: &mut Self::State) {}
+    }
+
+    impl Action for PendingFutureAction {
+        type State = PendingFutureState;
 
         fn apply(&self, _state: &mut Self::State) {}
 
@@ -1055,6 +1098,69 @@ mod tests {
         }
     }
 
+    impl State for PendingFutureState {
+        type Evaluator = TestEvaluator;
+        type Hash = u64;
+        type Action = PendingFutureAction;
+
+        fn make_initial_node(&self) -> (Self::Evaluator, Self::Hash) {
+            (TestEvaluator(0), 0)
+        }
+
+        fn expand(
+            &mut self,
+            evaluator: &Self::Evaluator,
+            _hash: Self::Hash,
+            candidate_set: &mut impl CandidateSet<
+                Action = Self::Action,
+                Evaluator = Self::Evaluator,
+                Hash = Self::Hash,
+            >,
+        ) {
+            match (evaluator.0, &self.mode) {
+                (0, PendingFutureMode::FinishedCandidate) => {
+                    candidate_set.push(
+                        PendingFutureAction::ShortDeadEnd,
+                        TestEvaluator(1),
+                        1,
+                        false,
+                        1,
+                    );
+                    candidate_set.push(
+                        PendingFutureAction::FutureGoal,
+                        TestEvaluator(-1),
+                        2,
+                        true,
+                        3,
+                    );
+                }
+                (0, PendingFutureMode::NonFinishedCandidate) => {
+                    candidate_set.push(PendingFutureAction::Enter, TestEvaluator(1), 1, false, 1);
+                }
+                (1, PendingFutureMode::NonFinishedCandidate) => {
+                    candidate_set.push(
+                        PendingFutureAction::ShortDeadEnd,
+                        TestEvaluator(2),
+                        2,
+                        false,
+                        1,
+                    );
+                    candidate_set.push(
+                        PendingFutureAction::FutureChild,
+                        TestEvaluator(3),
+                        3,
+                        false,
+                        3,
+                    );
+                }
+                (3, PendingFutureMode::NonFinishedCandidate) => {
+                    candidate_set.push(PendingFutureAction::Finish, TestEvaluator(-1), 4, true, 1);
+                }
+                _ => {}
+            }
+        }
+    }
+
     #[test]
     fn node_selector_removes_stale_hash_when_replacing_worst_candidate() {
         let mut selector: NodeSelector<TestAction, TestEvaluator, u64> = NodeSelector::new(2);
@@ -1105,6 +1211,43 @@ mod tests {
         let result = search.run(VariableWidthState, vec![]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn pending_finished_candidate_keeps_parent_alive_until_it_matures() {
+        let search = BeamSearch::new(FixedBeamWidthSuggester::new(2), 3);
+        let result = search
+            .run(
+                PendingFutureState {
+                    mode: PendingFutureMode::FinishedCandidate,
+                },
+                vec![],
+            )
+            .unwrap();
+
+        assert_eq!(result, vec![PendingFutureAction::FutureGoal]);
+    }
+
+    #[test]
+    fn pending_non_finished_candidate_can_be_added_after_short_sibling_dies() {
+        let search = BeamSearch::new(FixedBeamWidthSuggester::new(2), 5);
+        let result = search
+            .run(
+                PendingFutureState {
+                    mode: PendingFutureMode::NonFinishedCandidate,
+                },
+                vec![],
+            )
+            .unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                PendingFutureAction::Enter,
+                PendingFutureAction::FutureChild,
+                PendingFutureAction::Finish
+            ]
+        );
     }
 
     #[test]
