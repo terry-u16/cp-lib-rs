@@ -432,8 +432,8 @@ impl<A: Action, E: Evaluator, H: BeamHash> MultiSelector<A, E, H> {
         self.max_step = 1;
     }
 
-    fn pop_selector(&mut self) -> NodeSelector<A, E, H> {
-        self.selectors.pop_front().expect("No selector to pop.")
+    fn pop_selector(&mut self) -> Option<NodeSelector<A, E, H>> {
+        self.selectors.pop_front()
     }
 
     /// selectorを使い回す
@@ -796,7 +796,9 @@ impl<W: BeamWidthSuggester> BeamSearch<W> {
             // Euler Tourでselectorに候補を追加する
             tree.dfs(&mut selectors, turn)?;
 
-            let mut selector = selectors.pop_selector();
+            let Some(mut selector) = selectors.pop_selector() else {
+                return Err(BeamError::NoCandidates(NoCandidatesError::new(turn)));
+            };
             let best_candidate = selector.calculate_best_candidate();
 
             for callback in &mut callbacks {
@@ -946,6 +948,12 @@ mod tests {
         Finish,
     }
 
+    #[derive(Clone, Default, Eq, PartialEq, Debug)]
+    enum NoCandidateAction {
+        #[default]
+        Root,
+    }
+
     struct TestState;
 
     struct VariableWidthState;
@@ -953,6 +961,8 @@ mod tests {
     struct PendingFutureState {
         mode: PendingFutureMode,
     }
+
+    struct NoCandidateState;
 
     enum PendingFutureMode {
         FinishedCandidate,
@@ -1020,6 +1030,14 @@ mod tests {
 
     impl Action for PendingFutureAction {
         type State = PendingFutureState;
+
+        fn apply(&self, _state: &mut Self::State) {}
+
+        fn rollback(&self, _state: &mut Self::State) {}
+    }
+
+    impl Action for NoCandidateAction {
+        type State = NoCandidateState;
 
         fn apply(&self, _state: &mut Self::State) {}
 
@@ -1161,6 +1179,28 @@ mod tests {
         }
     }
 
+    impl State for NoCandidateState {
+        type Evaluator = TestEvaluator;
+        type Hash = u64;
+        type Action = NoCandidateAction;
+
+        fn make_initial_node(&self) -> (Self::Evaluator, Self::Hash) {
+            (TestEvaluator(0), 0)
+        }
+
+        fn expand(
+            &mut self,
+            _evaluator: &Self::Evaluator,
+            _hash: Self::Hash,
+            _candidate_set: &mut impl CandidateSet<
+                Action = Self::Action,
+                Evaluator = Self::Evaluator,
+                Hash = Self::Hash,
+            >,
+        ) {
+        }
+    }
+
     #[test]
     fn node_selector_removes_stale_hash_when_replacing_worst_candidate() {
         let mut selector: NodeSelector<TestAction, TestEvaluator, u64> = NodeSelector::new(2);
@@ -1248,6 +1288,14 @@ mod tests {
                 PendingFutureAction::Finish
             ]
         );
+    }
+
+    #[test]
+    fn root_with_no_candidates_returns_error_instead_of_panicking() {
+        let search = BeamSearch::new(FixedBeamWidthSuggester::new(2), 1);
+        let result = search.run(NoCandidateState, vec![]);
+
+        assert!(matches!(result, Err(BeamError::NoCandidates(_))));
     }
 
     #[test]
