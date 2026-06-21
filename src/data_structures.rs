@@ -2,11 +2,243 @@ use ac_library::Monoid;
 use itertools::Itertools;
 use rand::prelude::*;
 use rand::rng;
-use std::ops::{Index, IndexMut};
 use std::{
-    ops::{Bound, RangeBounds},
-    slice::Iter,
+    fmt,
+    mem::MaybeUninit,
+    ops::{Bound, Deref, DerefMut, Index, IndexMut, RangeBounds},
+    ptr,
+    slice::{Iter, IterMut},
 };
+
+/// 固定長配列上に値を詰める、`arrayvec::ArrayVec` の簡易版。
+///
+/// AtCoder では `arrayvec` crate を使えないため、`std` だけで動く代替として使う。
+///
+/// # Examples
+///
+/// ```
+/// use cp_lib_rs::data_structures::ArrayVec;
+///
+/// let mut v = ArrayVec::<i32, 4>::new();
+/// v.push(10);
+/// v.push(20);
+/// v.insert(1, 15);
+///
+/// assert_eq!(v.as_slice(), &[10, 15, 20]);
+/// assert_eq!(v.pop(), Some(20));
+/// assert_eq!(v.capacity(), 4);
+/// ```
+pub struct ArrayVec<T, const N: usize> {
+    len: usize,
+    data: [MaybeUninit<T>; N],
+}
+
+impl<T, const N: usize> ArrayVec<T, N> {
+    pub fn new() -> Self {
+        Self {
+            len: 0,
+            data: std::array::from_fn(|_| MaybeUninit::uninit()),
+        }
+    }
+
+    pub const fn capacity(&self) -> usize {
+        N
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.len == N
+    }
+
+    pub fn push(&mut self, value: T) {
+        self.try_push(value)
+            .ok()
+            .expect("ArrayVec capacity exceeded");
+    }
+
+    pub fn try_push(&mut self, value: T) -> Result<(), T> {
+        if self.len == N {
+            return Err(value);
+        }
+
+        self.data[self.len].write(value);
+        self.len += 1;
+        Ok(())
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        if self.len == 0 {
+            return None;
+        }
+
+        self.len -= 1;
+        Some(unsafe { self.data[self.len].as_ptr().read() })
+    }
+
+    pub fn insert(&mut self, index: usize, value: T) {
+        assert!(index <= self.len, "insert index out of bounds");
+        assert!(self.len < N, "ArrayVec capacity exceeded");
+
+        unsafe {
+            let ptr = self.data.as_mut_ptr();
+            ptr::copy(ptr.add(index), ptr.add(index + 1), self.len - index);
+            (*ptr.add(index)).write(value);
+        }
+        self.len += 1;
+    }
+
+    pub fn remove(&mut self, index: usize) -> T {
+        assert!(index < self.len, "remove index out of bounds");
+
+        unsafe {
+            let ptr = self.data.as_mut_ptr();
+            let value = (*ptr.add(index)).as_ptr().read();
+            self.len -= 1;
+            ptr::copy(ptr.add(index + 1), ptr.add(index), self.len - index);
+            value
+        }
+    }
+
+    pub fn swap_remove(&mut self, index: usize) -> T {
+        assert!(index < self.len, "swap_remove index out of bounds");
+
+        unsafe {
+            let ptr = self.data.as_mut_ptr();
+            let value = (*ptr.add(index)).as_ptr().read();
+            self.len -= 1;
+
+            if index != self.len {
+                ptr::copy_nonoverlapping(ptr.add(self.len), ptr.add(index), 1);
+            }
+
+            value
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.truncate(0);
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        if len >= self.len {
+            return;
+        }
+
+        unsafe {
+            let tail = ptr::slice_from_raw_parts_mut(
+                self.data.as_mut_ptr().add(len) as *mut T,
+                self.len - len,
+            );
+            ptr::drop_in_place(tail);
+        }
+        self.len = len;
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        unsafe { std::slice::from_raw_parts(self.data.as_ptr() as *const T, self.len) }
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        unsafe { std::slice::from_raw_parts_mut(self.data.as_mut_ptr() as *mut T, self.len) }
+    }
+
+    pub fn iter(&self) -> Iter<'_, T> {
+        self.as_slice().iter()
+    }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
+        self.as_mut_slice().iter_mut()
+    }
+}
+
+impl<T: Clone, const N: usize> Clone for ArrayVec<T, N> {
+    fn clone(&self) -> Self {
+        let mut cloned = Self::new();
+        for value in self {
+            cloned.push(value.clone());
+        }
+        cloned
+    }
+}
+
+impl<T, const N: usize> Default for ArrayVec<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T, const N: usize> Drop for ArrayVec<T, N> {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+impl<T: fmt::Debug, const N: usize> fmt::Debug for ArrayVec<T, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self).finish()
+    }
+}
+
+impl<T, const N: usize> Deref for ArrayVec<T, N> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl<T, const N: usize> DerefMut for ArrayVec<T, N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
+    }
+}
+
+impl<T, const N: usize> AsRef<[T]> for ArrayVec<T, N> {
+    fn as_ref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T, const N: usize> AsMut<[T]> for ArrayVec<T, N> {
+    fn as_mut(&mut self) -> &mut [T] {
+        self.as_mut_slice()
+    }
+}
+
+impl<'a, T, const N: usize> IntoIterator for &'a ArrayVec<T, N> {
+    type Item = &'a T;
+    type IntoIter = Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T, const N: usize> IntoIterator for &'a mut ArrayVec<T, N> {
+    type Item = &'a mut T;
+    type IntoIter = IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl<T, const N: usize> FromIterator<T> for ArrayVec<T, N> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut values = Self::new();
+        for value in iter {
+            values.push(value);
+        }
+        values
+    }
+}
 
 /// [0, n) の整数の集合を管理する定数倍が軽いデータ構造
 ///
@@ -1287,6 +1519,68 @@ mod test {
     use super::*;
     use ac_library::Additive;
     use itertools::Itertools;
+    use std::{cell::Cell, rc::Rc};
+
+    #[test]
+    fn array_vec_basic_operations() {
+        let mut values = ArrayVec::<i32, 4>::new();
+        assert!(values.is_empty());
+        assert_eq!(values.capacity(), 4);
+
+        values.push(1);
+        values.push(3);
+        values.insert(1, 2);
+        assert_eq!(values.as_slice(), &[1, 2, 3]);
+        assert_eq!(values.len(), 3);
+        assert!(!values.is_full());
+
+        values[1] = 20;
+        assert_eq!(values.remove(1), 20);
+        assert_eq!(values.as_slice(), &[1, 3]);
+
+        values.push(4);
+        values.push(5);
+        assert!(values.is_full());
+        assert_eq!(values.swap_remove(1), 3);
+        assert_eq!(values.as_slice(), &[1, 5, 4]);
+
+        assert_eq!(values.pop(), Some(4));
+        assert_eq!(values.pop(), Some(5));
+        assert_eq!(values.pop(), Some(1));
+        assert_eq!(values.pop(), None);
+    }
+
+    #[test]
+    fn array_vec_clone_collect_and_drop() {
+        #[derive(Clone)]
+        struct DropToken(Rc<Cell<usize>>);
+
+        impl Drop for DropToken {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let drops = Rc::new(Cell::new(0));
+        {
+            let mut values = (0..4)
+                .map(|_| DropToken(Rc::clone(&drops)))
+                .collect::<ArrayVec<_, 4>>();
+
+            let cloned = values.clone();
+            assert_eq!(cloned.len(), 4);
+
+            drop(values.remove(1));
+            assert_eq!(drops.get(), 1);
+
+            values.truncate(1);
+            assert_eq!(drops.get(), 3);
+
+            drop(cloned);
+            assert_eq!(drops.get(), 7);
+        }
+        assert_eq!(drops.get(), 8);
+    }
 
     #[test]
     fn index_set() {
