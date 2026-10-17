@@ -108,12 +108,18 @@ pub trait NeighborDelegator: Sized {
 /// 近傍の委譲をするstructを生成するマクロ
 ///
 /// `delegator_name` は生成するstructの名前、`env` は環境の型、`state` は状態の型を指定する。
-/// 各近傍は `variant => weight` の形式で指定する。
+/// 各近傍は `variant => weight` の形式で指定する。`variant` は `Neighbor` を実装した型名。
+/// 生成されるstructは `NeighborDelegator` を実装する。
 /// `weight` はその近傍が選ばれる確率の重みを表す。焼きなまし実行時に遅延評価されるため、`weight` は定数である必要はない。
 ///
 /// # Usage
 ///
 /// ```ignore
+/// use cp_lib_rs::neighbors;
+/// use cp_lib_rs::annealing::{run_annealing, SimdSelector};
+/// use std::time::Duration;
+///
+/// // Env・State、およびNeighborを実装した各近傍の型を別途定義する。
 /// neighbors! {
 ///     Neighbors, Env, State, [
 ///         TwoOpt => 1.0,
@@ -133,7 +139,7 @@ macro_rules! neighbors {
     ) => {
         use $crate::annealing::Neighbor as _;
 
-        // generate()内のmatch式で使用するNEIGHBOR_INDEXを定義する
+        // step()内のmatch式で使用するNEIGHBOR_INDEXを定義する
         neighbors! {
             @index 0; $($variant),+
         }
@@ -356,21 +362,28 @@ impl Display for AnnealingStatistics {
 
 /// 焼きなましを実行する関数
 ///
-/// `N` は近傍のセットを表すenumで、`NeighborEnum` トレイトを実装している必要がある。
+/// `N` は `NeighborDelegator` を実装した型。`neighbors!` マクロで生成できる。
+/// `S` は `NeighborSelector` を実装した近傍選択器。
 /// `I` は焼きなましの進捗を更新する間隔を指定する。例えば `I = 1024` とすると、1024回に1回の頻度で進捗を更新する。
+///
+/// 初期状態と受理した状態のうち、`annealing_score(1.0)` が最大の状態と統計を返す。
+/// 統計のスコア表示には `raw_score()` を用いる。
 ///
 /// # Usage
 ///
-/// ```ignore
-/// neighbors! {
-///     Neighbors, Env, State, [
-///         TwoOpt => 1.0,
-///         Swap => 2.0,
-///         Insert => 0.5,
-///     ]
-/// }
+/// ```
+/// use cp_lib_rs::annealing::{
+///     run_annealing, AnnealingStatistics, NeighborDelegator, SimdSelector,
+/// };
+/// use std::time::Duration;
 ///
-/// let (state, stats) = run_annealing::<Neighbors, SimdSelector, 128>(&input, state, 1e1, 1e-1, Duration::from_millis(1000), 42);
+/// fn solve<N: NeighborDelegator>(env: &N::Env, state: N::State)
+///     -> (N::State, AnnealingStatistics)
+/// {
+///     run_annealing::<N, SimdSelector, 128>(
+///         env, state, 1e1, 1e-1, Duration::from_millis(1000), 42,
+///     )
+/// }
 /// ```
 pub fn run_annealing<N: NeighborDelegator, S: NeighborSelector, const I: usize>(
     env: &N::Env,
@@ -710,7 +723,7 @@ mod test {
         }
     }
 
-    // 近傍セットを表すenumの生成
+    // 近傍への委譲を行うstructの生成
     crate::neighbors! {
         Neighbors, Input, State, [
             NoOp => 1.0,

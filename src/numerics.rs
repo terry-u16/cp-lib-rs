@@ -234,6 +234,7 @@ impl Erathosthenes {
     ///
     /// assert!(erathosthenes.is_prime(2));
     /// assert!(!erathosthenes.is_prime(4));
+    /// ```
     pub fn is_prime(&self, n: u32) -> bool {
         let n = n as usize;
         assert!(n <= self.max);

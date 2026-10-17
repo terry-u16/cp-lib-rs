@@ -28,7 +28,7 @@ use std::{
 ///     _sum += i;
 ///     sw.stop();
 ///
-///     // 名前は&'strでもStringでもOK
+///     // 名前は&'static strでもStringでもOK
 ///     let sw = perf.start(format!("no-op"));
 ///     sw.stop();
 /// }
@@ -92,7 +92,7 @@ impl Perf {
         }
     }
 
-    /// 計測を開始する（シングルトン）
+    /// 計測を開始する（スレッドごとのシングルトン）
     pub fn start_singleton(name: impl Into<Cow<'static, str>>) -> StopWatch<Rc<RefCell<Perf>>> {
         Self::SINGLETON.with(|perf| StopWatch {
             start: Instant::now(),
@@ -208,7 +208,7 @@ impl Display for Measure {
     }
 }
 
-/// &mut T と Rc<RefCell<T>> を統一的に扱って処理を行うためのトレイト
+/// `&mut T` と `Rc<RefCell<T>>` を統一的に扱って処理を行うためのトレイト
 pub trait WithMut<T> {
     fn with_mut<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> R;
 }

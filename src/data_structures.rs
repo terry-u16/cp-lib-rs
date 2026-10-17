@@ -12,7 +12,7 @@ use std::{
 
 /// 固定長配列上に値を詰める、`arrayvec::ArrayVec` の簡易版。
 ///
-/// AtCoder では `arrayvec` crate を使えないため、`std` だけで動く代替として使う。
+/// 外部crateに依存せず、`std` だけで動く固定容量の可変長配列。
 ///
 /// # Examples
 ///
@@ -244,7 +244,7 @@ impl<T, const N: usize> FromIterator<T> for ArrayVec<T, N> {
 
 /// [0, n) の整数の集合を管理する定数倍が軽いデータ構造
 ///
-/// https://topcoder-tomerun.hatenablog.jp/entry/2021/06/12/134643
+/// <https://topcoder-tomerun.hatenablog.jp/entry/2021/06/12/134643>
 #[derive(Debug, Clone)]
 pub struct IndexSet {
     values: Vec<usize>,
@@ -298,7 +298,7 @@ impl IndexSet {
 
 /// BFSを繰り返すときに訪問済みかを記録する配列を毎回初期化しなくて良くするアレ
 ///
-/// https://topcoder-tomerun.hatenablog.jp/entry/2022/11/06/145156
+/// <https://topcoder-tomerun.hatenablog.jp/entry/2022/11/06/145156>
 #[derive(Debug, Clone)]
 pub struct FastClearArray {
     values: Vec<u64>,
@@ -512,12 +512,12 @@ impl<T: Ord> Compressor<T> {
         self.unique_len
     }
 
-    /// 元の配列におけるA[index]を取得する
+    /// 元の配列における `A[index]` を取得する
     pub fn raw(&self, index: usize) -> &T {
         &self.values[index]
     }
 
-    /// 圧縮後の配列におけるA[index]を取得する
+    /// 圧縮後の配列における `A[index]` を取得する
     pub fn as_slice(&self) -> &[usize] {
         &self.indices
     }
@@ -537,19 +537,21 @@ pub struct WaveletMatrix<T> {
     n: usize,
     /// 元配列のデータ
     raw_data: Vec<T>,
-    /// number of bit levels (e.g., up to 64 for u64)
+    /// ビットの階層数（1〜63）。
     max_log: usize,
     /// per level bitmap of '1's（高ビット→低ビットの順に格納）
     bitmaps: Vec<BitRank>,
     /// per level, number of zeros (split point)（インデックスはビット位置 0..max_log-1）
     mids: Vec<usize>,
-    /// 末端（全ビット処理後＝値順）での元インデックス。列挙時に直接参照する。
+    /// 全ビットの安定分割後の元インデックス。同値の要素は元の順序を保つが、
+    /// 配列全体は数値の昇順ではない。列挙時に直接参照する。
     leaf_ids: Vec<usize>,
 }
 
 impl<T: Clone + Into<u64> + PartialOrd> WaveletMatrix<T> {
     /// Build from data. O(Nlogσ)
     ///
+    /// `u64` への変換後の入力値は `2^63` 未満に対応する。
     /// Wavelet Matrixの計算量はデータの最大ビット長に依存する。
     /// 計算量を削減するため、あらかじめ座標圧縮しておくことを推奨。
     pub fn new<I>(data: I) -> Self
@@ -735,7 +737,7 @@ impl<T: Clone + Into<u64> + PartialOrd> WaveletMatrix<T> {
             }
         }
 
-        // 葉配列（値順）での位置は l + k → 元インデックスは leaf_ids[その位置]
+        // 同値の要素の区間内での位置は l + k → 元インデックスは leaf_ids[その位置]
         self.leaf_ids[l + k]
     }
 
@@ -1030,6 +1032,8 @@ impl BitRank {
 /// - 初期化: O(N)
 /// - ハッシュ値の取得: O(1)
 ///
+/// 基数はインスタンスごとにランダムに選ぶ。同じインスタンス内の区間比較に使う。
+/// 異なるインスタンスのハッシュ値は、同じ内容でも一致するとは限らない。
 ///
 /// # Examples
 ///
@@ -1146,7 +1150,7 @@ impl<T> Queue<T> {
 
 /// Implicit Treap
 ///
-/// 配列を平衡二分木として保持し、ランダムアクセスや区間操作を O(log N) で扱う。
+/// 配列をランダムな優先度の二分木として保持し、ランダムアクセスや区間操作を期待 O(log N) で扱う。
 ///
 /// # Examples
 ///

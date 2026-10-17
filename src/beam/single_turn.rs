@@ -146,8 +146,8 @@ impl<'a, A: Action, E: Evaluator, H: BeamHash> CandidateSet for CandidateSetImpl
 }
 
 /// ノードの候補から実際に追加するものを選ぶ構造体
-/// ビーム幅の個数だけ、評価がよいものを選ぶ
-/// ハッシュ値が一致したものについては、評価がよいほうのみを残す
+/// 未完了候補をビーム幅まで保持し、同じハッシュ値ではコストが小さいほうを残す。
+/// 完了候補は別に全件保持する。
 struct NodeSelector<A: Action, E: Evaluator, H: BeamHash> {
     beam_width: usize,
     candidates: Vec<Candidate<A, E, H>>,
@@ -181,7 +181,7 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
 
         let cost = candidate.evaluator.evaluate();
 
-        // 保持しているどの候補よりもコストが小さくないとき
+        // 保持中の最悪候補以上のコストなら、置き換えても改善しない。
         if let Some(segtree) = &self.cost_segtree {
             if cost >= segtree.all_prod().0 {
                 return;
@@ -486,13 +486,13 @@ impl TourStep {
 
 /// ビームサーチを行う構造体
 ///
-/// 使用には以下の実装が必要になる。
+/// 使用には以下のトレイトを実装した型を用いる。
 ///
 /// - `State`: 状態遷移を行うための構造体
 /// - `Evaluator`: 状態のコストを評価するための構造体
-/// - `BeamHash`: ビームサーチのためのハッシュ値を計算するための構造体
+/// - `BeamHash`: 重複判定に使う値のマーカートレイト（`u8`・`u16`・`u32`・`u64` は実装済み）
 /// - `Action`: 状態遷移を行うためのアクションを表す構造体
-/// - `BeamWidthSuggester`: ビーム幅を提案するための構造体（Optional）
+/// - `BeamWidthSuggester`: ビーム幅を提案するトレイト。既存の固定幅・自動調整の実装を利用可能。
 pub struct BeamSearch<W: BeamWidthSuggester> {
     beam_width_suggester: W,
     max_turn: usize,
