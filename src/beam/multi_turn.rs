@@ -40,10 +40,11 @@ impl<T> ObjectPool<T> {
 
     fn remove(&mut self, index: ObjectPoolIndex) {
         let index = index.0 as usize;
+        // Dropがpanicしても、プール破棄時に同じ要素を再び破棄しない。
+        self.vacant_indices.push(index);
         unsafe {
             self.data[index].assume_init_drop();
         }
-        self.vacant_indices.push(index);
     }
 }
 
@@ -1292,6 +1293,42 @@ mod tests {
                 }
                 _ => {}
             }
+        }
+    }
+
+    #[test]
+    fn object_pool_remove_survives_panicking_drop() {
+        use std::{
+            cell::Cell,
+            panic::{AssertUnwindSafe, catch_unwind},
+        };
+
+        struct Token<'a>(&'a Cell<usize>, bool);
+        impl Drop for Token<'_> {
+            fn drop(&mut self) {
+                let count = self.0.get();
+                self.0.set(count + 1);
+                if self.1 && count == 0 {
+                    panic!("intentional drop panic");
+                }
+            }
+        }
+
+        for reuse in [false, true] {
+            let removed = Cell::new(0);
+            let remaining = Cell::new(0);
+            let replacement = Cell::new(0);
+            let mut pool = ObjectPool::new();
+            let index = pool.push(Token(&removed, true));
+            pool.push(Token(&remaining, false));
+            assert!(catch_unwind(AssertUnwindSafe(|| pool.remove(index))).is_err());
+            if reuse {
+                assert_eq!(pool.push(Token(&replacement, false)), index);
+            }
+            drop(pool);
+            assert_eq!(removed.get(), 1);
+            assert_eq!(remaining.get(), 1);
+            assert_eq!(replacement.get(), usize::from(reuse));
         }
     }
 

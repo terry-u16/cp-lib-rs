@@ -131,14 +131,16 @@ impl<T, const N: usize> ArrayVec<T, N> {
             return;
         }
 
+        let old_len = self.len;
+        // Dropがpanicしても、破棄済みの末尾を再び参照・破棄しない。
+        self.len = len;
         unsafe {
             let tail = ptr::slice_from_raw_parts_mut(
                 self.data.as_mut_ptr().add(len) as *mut T,
-                self.len - len,
+                old_len - len,
             );
             ptr::drop_in_place(tail);
         }
-        self.len = len;
     }
 
     pub fn as_slice(&self) -> &[T] {
@@ -657,6 +659,10 @@ impl<T: Clone + Into<u64> + PartialOrd> WaveletMatrix<T> {
         let (mut l, mut r) = self.bounds_to_lr(range);
         assert!(l <= r && r <= self.n);
 
+        if value >> self.max_log != 0 {
+            return 0;
+        }
+
         for level in (0..self.max_log).rev() {
             let br = &self.bitmaps[self.max_log - 1 - level];
             let bit = ((value >> level) & 1) != 0;
@@ -762,6 +768,10 @@ impl<T: Clone + Into<u64> + PartialOrd> WaveletMatrix<T> {
     fn freq_lt(&self, range: impl RangeBounds<usize>, upper: T) -> usize {
         let upper = upper.into();
         let (mut l, mut r) = self.bounds_to_lr(range);
+
+        if upper >> self.max_log != 0 {
+            return r - l;
+        }
 
         if l == r {
             return 0;
@@ -1520,6 +1530,60 @@ mod test {
     use ac_library::Additive;
     use itertools::Itertools;
     use std::{cell::Cell, rc::Rc};
+
+    #[test]
+    fn array_vec_truncate_survives_panicking_drop() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        struct Token<'a>(&'a Cell<usize>, bool);
+        impl Drop for Token<'_> {
+            fn drop(&mut self) {
+                let count = self.0.get();
+                self.0.set(count + 1);
+                if self.1 && count == 0 {
+                    panic!("intentional drop panic");
+                }
+            }
+        }
+
+        let counts = [Cell::new(0), Cell::new(0), Cell::new(0)];
+        let mut values = ArrayVec::<_, 3>::new();
+        for (i, count) in counts.iter().enumerate() {
+            values.push(Token(count, i == 1));
+        }
+        assert!(catch_unwind(AssertUnwindSafe(|| values.truncate(1))).is_err());
+        assert_eq!(values.len(), 1);
+        assert_eq!(counts.each_ref().map(Cell::get), [0, 1, 1]);
+        drop(values);
+        assert_eq!(counts.each_ref().map(Cell::get), [1, 1, 1]);
+    }
+
+    #[test]
+    fn wavelet_counts_match_naive_across_value_domain() {
+        for data in [vec![], vec![0u64], vec![0, 1, 3], vec![1u64 << 62, 0]] {
+            let matrix = WaveletMatrix::new(data.clone());
+            let bounds = [0, 1, 2, 3, 4, 7, 1u64 << 62, 1u64 << 63, u64::MAX];
+            for l in 0..=data.len() {
+                for r in l..=data.len() {
+                    for &value in &bounds {
+                        assert_eq!(
+                            matrix.rank(l..r, value),
+                            data[l..r].iter().filter(|&&x| x == value).count()
+                        );
+                        for &upper in &bounds {
+                            assert_eq!(
+                                matrix.range_freq(l..r, value, upper),
+                                data[l..r]
+                                    .iter()
+                                    .filter(|&&x| value <= x && x < upper)
+                                    .count()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn array_vec_basic_operations() {

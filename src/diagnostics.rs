@@ -189,8 +189,9 @@ impl Measure {
     fn std_dev(&self) -> Duration {
         assert_ne!(self.cnt, 0);
 
-        let mean = self.mean().as_secs_f64();
-        let variance = (self.sum_sq / self.cnt as f64) - (mean * mean);
+        // Durationへの丸めは最後に行い、浮動小数点の丸め誤差も吸収する。
+        let mean = self.sum / self.cnt as f64;
+        let variance = ((self.sum_sq / self.cnt as f64) - (mean * mean)).max(0.0);
         Duration::from_secs_f64(variance.sqrt())
     }
 }
@@ -222,5 +223,32 @@ impl<T> WithMut<T> for Rc<RefCell<T>> {
     fn with_mut<R>(&mut self, f: impl FnOnce(&mut T) -> R) -> R {
         let mut guard = self.borrow_mut();
         f(&mut *guard)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standard_deviation_handles_subnanosecond_mean() {
+        let mut measure = Measure::default();
+        for nanos in [1000, 1001, 1001] {
+            measure.add_measure(&Duration::from_nanos(nanos));
+        }
+        assert_eq!(measure.mean(), Duration::from_nanos(1001));
+        assert_eq!(measure.std_dev(), Duration::ZERO);
+        assert!(!measure.to_string().is_empty());
+    }
+
+    #[test]
+    fn standard_deviation_matches_known_values() {
+        for (samples, expected) in [(vec![1000, 2000], 500), (vec![1001; 1000], 0), (vec![0], 0)] {
+            let mut measure = Measure::default();
+            for nanos in samples {
+                measure.add_measure(&Duration::from_nanos(nanos));
+            }
+            assert_eq!(measure.std_dev(), Duration::from_nanos(expected));
+        }
     }
 }

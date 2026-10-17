@@ -445,6 +445,12 @@ impl<E: Evaluator, H: BeamHash, S: State<Evaluator = E, Hash = H, Action = A>, A
     fn restore_path(&self, parent_id: ParentId) -> Vec<A> {
         let mut result = self.direct_road.clone();
 
+        // 初回の展開では親は初期状態であり、そこまでの操作はない。
+        if self.current_tour.is_empty() {
+            assert_eq!(parent_id, ParentId(0));
+            return result;
+        }
+
         for (tour_step, action) in self.current_tour.iter() {
             match *tour_step {
                 TourStep::FORWARD_EDGE => {
@@ -714,6 +720,53 @@ mod tests {
                 Hash = Self::Hash,
             >,
         ) {
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct OneStepAction;
+
+    struct OneStepState {
+        finished: bool,
+    }
+
+    impl Action for OneStepAction {
+        type State = OneStepState;
+        fn apply(&self, _: &mut Self::State) {}
+        fn rollback(&self, _: &mut Self::State) {}
+    }
+
+    impl State for OneStepState {
+        type Evaluator = TestEvaluator;
+        type Hash = u64;
+        type Action = OneStepAction;
+        fn make_initial_node(&self) -> (TestEvaluator, u64) {
+            (TestEvaluator(0), 0)
+        }
+        fn expand(
+            &mut self,
+            _: &TestEvaluator,
+            _: u64,
+            candidates: &mut impl CandidateSet<
+                Action = OneStepAction,
+                Evaluator = TestEvaluator,
+                Hash = u64,
+            >,
+        ) {
+            candidates.push(OneStepAction, TestEvaluator(0), 1, self.finished);
+        }
+    }
+
+    #[test]
+    fn beam_search_restores_first_turn_solution() {
+        use crate::beam::common::FixedBeamWidthSuggester;
+        for (finished, max_turn) in [(true, 5), (false, 1), (false, 5)] {
+            let search = BeamSearch::new(FixedBeamWidthSuggester::new(1), max_turn);
+            let path = search.run(OneStepState { finished }, vec![]).unwrap();
+            assert_eq!(
+                path,
+                vec![OneStepAction; if finished { 1 } else { max_turn }]
+            );
         }
     }
 
