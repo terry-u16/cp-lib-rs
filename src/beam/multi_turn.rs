@@ -954,6 +954,9 @@ mod tests {
         Root,
     }
 
+    #[derive(Clone, Default, Eq, PartialEq, Debug)]
+    struct TransitionAction(i32);
+
     struct TestState;
 
     struct VariableWidthState;
@@ -964,6 +967,11 @@ mod tests {
 
     struct NoCandidateState;
 
+    #[derive(Default)]
+    struct TransitionState {
+        path: Vec<i32>,
+    }
+
     enum PendingFutureMode {
         FinishedCandidate,
         NonFinishedCandidate,
@@ -971,6 +979,12 @@ mod tests {
 
     #[derive(Clone)]
     struct TestEvaluator(i32);
+
+    #[derive(Clone)]
+    struct TransitionEvaluator {
+        cost: i32,
+        path: Vec<i32>,
+    }
 
     struct VariableBeamWidthSuggester {
         widths: Vec<usize>,
@@ -1044,11 +1058,31 @@ mod tests {
         fn rollback(&self, _state: &mut Self::State) {}
     }
 
+    impl Action for TransitionAction {
+        type State = TransitionState;
+
+        fn apply(&self, state: &mut Self::State) {
+            state.path.push(self.0);
+        }
+
+        fn rollback(&self, state: &mut Self::State) {
+            assert_eq!(state.path.pop(), Some(self.0));
+        }
+    }
+
     impl Evaluator for TestEvaluator {
         type Cost = i32;
 
         fn evaluate(&self) -> Self::Cost {
             self.0
+        }
+    }
+
+    impl Evaluator for TransitionEvaluator {
+        type Cost = i32;
+
+        fn evaluate(&self) -> Self::Cost {
+            self.cost
         }
     }
 
@@ -1201,6 +1235,66 @@ mod tests {
         }
     }
 
+    impl State for TransitionState {
+        type Evaluator = TransitionEvaluator;
+        type Hash = u64;
+        type Action = TransitionAction;
+
+        fn make_initial_node(&self) -> (Self::Evaluator, Self::Hash) {
+            (
+                TransitionEvaluator {
+                    cost: 0,
+                    path: vec![],
+                },
+                0,
+            )
+        }
+
+        fn expand(
+            &mut self,
+            evaluator: &Self::Evaluator,
+            _hash: Self::Hash,
+            candidate_set: &mut impl CandidateSet<
+                Action = Self::Action,
+                Evaluator = Self::Evaluator,
+                Hash = Self::Hash,
+            >,
+        ) {
+            assert_eq!(self.path, evaluator.path);
+
+            let mut push =
+                |action_id: i32, cost: i32, hash: u64, is_finished: bool, turn_step: usize| {
+                    let mut path = self.path.clone();
+                    path.push(action_id);
+                    candidate_set.push(
+                        TransitionAction(action_id),
+                        TransitionEvaluator { cost, path },
+                        hash,
+                        is_finished,
+                        turn_step,
+                    );
+                };
+
+            match self.path.as_slice() {
+                [] => {
+                    push(1, 10, 1, false, 1);
+                    push(2, 20, 2, false, 1);
+                }
+                [1] => {
+                    push(3, 1, 3, false, 1);
+                }
+                [2] => {
+                    push(4, 2, 4, false, 2);
+                    push(5, 3, 5, false, 1);
+                }
+                [2, 4] => {
+                    push(6, -1, 6, true, 1);
+                }
+                _ => {}
+            }
+        }
+    }
+
     #[test]
     fn node_selector_removes_stale_hash_when_replacing_worst_candidate() {
         let mut selector: NodeSelector<TestAction, TestEvaluator, u64> = NodeSelector::new(2);
@@ -1296,6 +1390,21 @@ mod tests {
         let result = search.run(NoCandidateState, vec![]);
 
         assert!(matches!(result, Err(BeamError::NoCandidates(_))));
+    }
+
+    #[test]
+    fn dfs_applies_and_rolls_back_actions_along_expected_paths() {
+        let search = BeamSearch::new(FixedBeamWidthSuggester::new(3), 4);
+        let result = search.run(TransitionState::default(), vec![]).unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                TransitionAction(2),
+                TransitionAction(4),
+                TransitionAction(6)
+            ]
+        );
     }
 
     #[test]
