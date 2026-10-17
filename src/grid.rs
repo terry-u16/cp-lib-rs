@@ -1,6 +1,6 @@
 use std::{
     fmt::Display,
-    ops::{Add, AddAssign, Index, IndexMut, Neg},
+    ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -119,6 +119,97 @@ impl Add<CoordDiff> for CoordDiff {
             dr: self.dr + rhs.dr,
             dc: self.dc + rhs.dc,
         }
+    }
+}
+
+impl Add<Coord> for CoordDiff {
+    type Output = Coord;
+
+    fn add(self, rhs: Coord) -> Self::Output {
+        rhs + self
+    }
+}
+
+impl Sub<CoordDiff> for Coord {
+    type Output = Coord;
+
+    fn sub(self, rhs: CoordDiff) -> Self::Output {
+        Coord {
+            row: self.row.wrapping_sub(rhs.dr as u8),
+            col: self.col.wrapping_sub(rhs.dc as u8),
+        }
+    }
+}
+
+impl SubAssign<CoordDiff> for Coord {
+    fn sub_assign(&mut self, rhs: CoordDiff) {
+        *self = *self - rhs;
+    }
+}
+
+// Differences outside the i8 range wrap, as in CoordDiff::new.
+impl Sub<Coord> for Coord {
+    type Output = CoordDiff;
+
+    fn sub(self, rhs: Coord) -> Self::Output {
+        CoordDiff::new(
+            self.row as i32 - rhs.row as i32,
+            self.col as i32 - rhs.col as i32,
+        )
+    }
+}
+
+impl Sub<CoordDiff> for CoordDiff {
+    type Output = CoordDiff;
+
+    fn sub(self, rhs: CoordDiff) -> Self::Output {
+        CoordDiff {
+            dr: self.dr - rhs.dr,
+            dc: self.dc - rhs.dc,
+        }
+    }
+}
+
+impl SubAssign<CoordDiff> for CoordDiff {
+    fn sub_assign(&mut self, rhs: CoordDiff) {
+        *self = *self - rhs;
+    }
+}
+
+// Scalar operations use i32 arithmetic, then narrow as in CoordDiff::new.
+impl Mul<i32> for CoordDiff {
+    type Output = CoordDiff;
+
+    fn mul(self, rhs: i32) -> Self::Output {
+        CoordDiff::new(self.dr() * rhs, self.dc() * rhs)
+    }
+}
+
+impl Mul<CoordDiff> for i32 {
+    type Output = CoordDiff;
+
+    fn mul(self, rhs: CoordDiff) -> Self::Output {
+        rhs * self
+    }
+}
+
+impl MulAssign<i32> for CoordDiff {
+    fn mul_assign(&mut self, rhs: i32) {
+        *self = *self * rhs;
+    }
+}
+
+impl Div<i32> for CoordDiff {
+    type Output = CoordDiff;
+
+    fn div(self, rhs: i32) -> Self::Output {
+        CoordDiff::new(self.dr() / rhs, self.dc() / rhs)
+    }
+}
+
+impl DivAssign<i32> for CoordDiff {
+    fn div_assign(&mut self, rhs: i32) {
+        *self = *self / rhs;
     }
 }
 
@@ -384,6 +475,73 @@ mod test {
 
         let expected = Coord::new(!0, 9);
         assert_eq!(expected, c);
+    }
+
+    #[test]
+    fn coord_translation_round_trip() {
+        for row in 0..=255 {
+            let c = Coord::new(row, 255 - row);
+            for dr in -128..=127 {
+                let d = CoordDiff::new(dr, -1 - dr);
+                assert_eq!(c + d, d + c);
+                assert_eq!((c + d) - d, c);
+                assert_eq!((c + d) - c, d);
+
+                let mut translated = c;
+                translated -= d;
+                assert_eq!(translated + d, c);
+            }
+        }
+    }
+
+    #[test]
+    fn coord_difference() {
+        assert_eq!(Coord::new(2, 9) - Coord::new(5, 4), CoordDiff::new(-3, 5));
+        assert_eq!(
+            Coord::new(255, 0) - Coord::new(0, 255),
+            CoordDiff::new(-1, 1)
+        );
+    }
+
+    #[test]
+    fn coord_diff_arithmetic() {
+        let a = CoordDiff::new(-3, 5);
+        let b = CoordDiff::new(7, -2);
+        assert_eq!(a + b, CoordDiff::new(4, 3));
+        assert_eq!(a - b, CoordDiff::new(-10, 7));
+        assert_eq!(-a, a.invert());
+        assert_eq!(a + (-a), CoordDiff::default());
+
+        let mut d = a;
+        d += b;
+        assert_eq!(d, a + b);
+        d -= b;
+        assert_eq!(d, a);
+    }
+
+    #[test]
+    fn coord_diff_scalar_arithmetic() {
+        let d = CoordDiff::new(-3, 5);
+        assert_eq!(d * -2, CoordDiff::new(6, -10));
+        assert_eq!(-2 * d, d * -2);
+        assert_eq!(d * 0, CoordDiff::default());
+        assert_eq!(d / 2, CoordDiff::new(-1, 2));
+        assert_eq!(d / -2, CoordDiff::new(1, -2));
+        assert_eq!(CoordDiff::new(64, -128) * 2, CoordDiff::new(-128, 0));
+        assert_eq!(CoordDiff::new(-128, 0) / -1, CoordDiff::new(-128, 0));
+        assert_eq!(d / 256, CoordDiff::default());
+
+        let mut scaled = d;
+        scaled *= -2;
+        assert_eq!(scaled, CoordDiff::new(6, -10));
+        scaled /= -2;
+        assert_eq!(scaled, d);
+    }
+
+    #[test]
+    #[should_panic]
+    fn coord_diff_divide_by_zero() {
+        let _ = CoordDiff::new(1, 2) / 0;
     }
 
     #[test]
