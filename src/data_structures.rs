@@ -1,5 +1,7 @@
 use ac_library::Monoid;
+mod link_cut_tree;
 use itertools::Itertools;
+pub use link_cut_tree::{LinkCutTree, NoAggregation};
 use rand::prelude::*;
 use rand::rng;
 use std::{
