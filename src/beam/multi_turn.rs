@@ -1,8 +1,9 @@
 //! 複数ターン先への遷移に対応するビームサーチ。
 //! 状態の木を二重連鎖木で保持し、候補を到達ターンごとに管理する。
 
-use super::common::{BeamError, BeamWidthSuggester, MaxCostIndex, NoCandidatesError};
-use ac_library::Segtree;
+use super::common::{
+    BeamError, BeamWidthSuggester, MaxCostIndex, NoCandidatesError, ReusableSegtree,
+};
 use num_traits::bounds::LowerBounded;
 use rustc_hash::FxHashMap;
 use std::{
@@ -235,8 +236,9 @@ struct NodeSelector<A: Action, E: Evaluator, H: BeamHash> {
     hash_to_index: FxHashMap<H, usize>,
     costs: Vec<(E::Cost, usize)>,
     /// セグメント木を削除可能な優先度付きキューとして使う
-    cost_segtree: Option<Segtree<MaxCostIndex<E::Cost>>>,
+    cost_segtree: Option<ReusableSegtree<MaxCostIndex<E::Cost>>>,
     finished_candidates: Vec<Candidate<A, E, H>>,
+    spare_segtree: Option<ReusableSegtree<MaxCostIndex<E::Cost>>>,
 }
 
 impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
@@ -252,6 +254,7 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
             hash_to_index: FxHashMap::default(),
             costs,
             cost_segtree: None,
+            spare_segtree: None,
             finished_candidates: Vec::new(),
         }
     }
@@ -352,20 +355,28 @@ impl<A: Action, E: Evaluator, H: BeamHash> NodeSelector<A, E, H> {
 
         self.costs.clear();
         self.hash_to_index.clear();
-        self.cost_segtree = None;
+        if let Some(segtree) = self.cost_segtree.take() {
+            self.spare_segtree = Some(segtree);
+        }
 
         self.candidates.drain(..)
     }
 
     fn rebuild_segtree(&mut self) {
-        let mut costs =
-            vec![<MaxCostIndex<E::Cost> as ac_library::Monoid>::identity(); self.segtree_width];
-        for (index, candidate) in self.candidates.iter().enumerate() {
-            costs[index] = (candidate.evaluator.evaluate(), index);
-        }
-
+        let mut segtree = self
+            .cost_segtree
+            .take()
+            .or_else(|| self.spare_segtree.take())
+            .unwrap_or_else(ReusableSegtree::new);
+        segtree.rebuild(
+            self.segtree_width,
+            self.candidates
+                .iter()
+                .enumerate()
+                .map(|(index, candidate)| (candidate.evaluator.evaluate(), index)),
+        );
         self.costs.clear();
-        self.cost_segtree = Some(Segtree::from(costs));
+        self.cost_segtree = Some(segtree);
     }
 
     fn calculate_best_candidate(&self) -> Option<&Candidate<A, E, H>> {
@@ -1297,6 +1308,46 @@ mod tests {
                 }
                 _ => {}
             }
+        }
+    }
+
+    #[test]
+    fn node_selector_reuses_tree_across_full_and_partial_turns() {
+        let mut selector: NodeSelector<TestAction, TestEvaluator, u64> = NodeSelector::new(1);
+        for (width, count) in [
+            (9usize, 40usize),
+            (2, 1),
+            (2, 40),
+            (17, 80),
+            (3, 40),
+            (1, 40),
+        ] {
+            selector.set_beam_width(width);
+            // 同一ハッシュの改善・悪化と、候補の追い出しを含める。
+            for hash in 0..count as u64 {
+                for cost in [100 + hash as i32, hash as i32, 200 + hash as i32] {
+                    selector.push(
+                        Candidate::new(
+                            TestAction::Root,
+                            TestEvaluator(cost),
+                            hash,
+                            ObjectPoolIndex::NONE,
+                        ),
+                        false,
+                    );
+                }
+            }
+            let mut actual: Vec<_> = selector
+                .iter_candidates_and_clear()
+                .map(|c| (c.evaluator.evaluate(), c.hash))
+                .collect();
+            actual.sort_unstable();
+            let expected: Vec<_> = (0..width.min(count))
+                .map(|i| (i as i32, i as u64))
+                .collect();
+            assert_eq!(actual, expected);
+            assert!(selector.cost_segtree.is_none());
+            assert!(selector.spare_segtree.is_some());
         }
     }
 

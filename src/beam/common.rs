@@ -241,6 +241,61 @@ impl BeamWidthSuggester for BayesianBeamWidthSuggester {
     }
 }
 
+/// バッファを保持したまま再構築できる、候補選択用のセグメント木。
+/// 論理サイズは毎回変えられる。Vecの容量は縮めず、未使用の葉は単位元に戻す。
+pub(super) struct ReusableSegtree<M: Monoid> {
+    size: usize,
+    len: usize,
+    data: Vec<M::S>,
+}
+
+impl<M: Monoid> ReusableSegtree<M> {
+    pub(super) fn new() -> Self {
+        Self {
+            size: 0,
+            len: 0,
+            data: Vec::new(),
+        }
+    }
+
+    /// valuesはlen個以下。残りの葉は単位元で埋める。
+    pub(super) fn rebuild(&mut self, len: usize, values: impl IntoIterator<Item = M::S>) {
+        self.len = len;
+        self.size = len.next_power_of_two();
+        self.data.resize(2 * self.size, M::identity());
+        let leaves = &mut self.data[self.size..];
+        leaves.fill(M::identity());
+        for (index, value) in values.into_iter().enumerate() {
+            assert!(index < len);
+            leaves[index] = value;
+        }
+        for index in (1..self.size).rev() {
+            self.data[index] =
+                M::binary_operation(&self.data[2 * index], &self.data[2 * index + 1]);
+        }
+    }
+
+    pub(super) fn get(&self, index: usize) -> M::S {
+        assert!(index < self.len);
+        self.data[self.size + index].clone()
+    }
+
+    pub(super) fn set(&mut self, index: usize, value: M::S) {
+        assert!(index < self.len);
+        let mut index = self.size + index;
+        self.data[index] = value;
+        while index > 1 {
+            index /= 2;
+            self.data[index] =
+                M::binary_operation(&self.data[2 * index], &self.data[2 * index + 1]);
+        }
+    }
+
+    pub(super) fn all_prod(&self) -> M::S {
+        self.data[1].clone()
+    }
+}
+
 pub(super) struct MaxCostIndex<T>(Infallible, PhantomData<fn() -> T>);
 
 impl<T> Monoid for MaxCostIndex<T>
@@ -301,6 +356,43 @@ impl Error for BeamError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reusable_segtree_matches_acl_across_width_changes() {
+        type M = MaxCostIndex<i32>;
+        let mut tree = ReusableSegtree::<M>::new();
+        let mut random = 123u64;
+        for width in [16usize, 3, 8, 1, 33, 5, 32, 0, 17] {
+            let old_capacity = tree.data.capacity();
+            let old_ptr = tree.data.as_ptr();
+            // 一部の葉しか使わない再構築でも古い値が残らないこと。
+            let values: Vec<_> = (0..width / 2).map(|i| (i32::MIN, i)).collect();
+            tree.rebuild(width, values.iter().copied());
+            if 2 * width.next_power_of_two() <= old_capacity {
+                assert_eq!(tree.data.capacity(), old_capacity);
+                assert_eq!(tree.data.as_ptr(), old_ptr);
+            }
+            let mut leaves = vec![M::identity(); width];
+            leaves[..values.len()].copy_from_slice(&values);
+            let mut reference = ac_library::Segtree::<M>::from(leaves);
+            assert_eq!(tree.all_prod(), reference.all_prod());
+            for _ in 0..200 {
+                if width == 0 {
+                    break;
+                }
+                random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let index = (random >> 32) as usize % width;
+                // 同点を多く含め、選択されるインデックスまで比較する。
+                let value = ((random % 7) as i32, index);
+                tree.set(index, value);
+                reference.set(index, value);
+                assert_eq!(tree.all_prod(), reference.all_prod());
+                for i in 0..width {
+                    assert_eq!(tree.get(i), reference.get(i));
+                }
+            }
+        }
+    }
 
     #[test]
     fn bayesian_suggester_with_zero_warmup_keeps_distribution_finite_after_first_suggest() {

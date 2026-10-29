@@ -242,59 +242,84 @@ impl<T, const N: usize> FromIterator<T> for ArrayVec<T, N> {
     }
 }
 
-/// [0, n) の整数の集合を管理する定数倍が軽いデータ構造
+macro_rules! define_index_set {
+    ($name:ident, $int:ty) => {
+        /// `[0, n)` の整数集合。追加・削除・所属判定はO(1)。
+        ///
+        /// 値と位置を同じ整数型で保持し、位置の最大値を不在の番兵に使う。
+        /// `n`は整数型の最大値以下。反復順序は削除によって変わる。
+        #[derive(Debug, Clone)]
+        pub struct $name {
+            values: Vec<$int>,
+            positions: Vec<$int>,
+        }
+
+        impl $name {
+            pub fn new(n: usize) -> Self {
+                assert!(n <= <$int>::MAX as usize, "IndexSet universe is too large");
+                Self {
+                    values: Vec::new(),
+                    positions: vec![<$int>::MAX; n],
+                }
+            }
+
+            pub fn add(&mut self, value: $int) {
+                let pos = &mut self.positions[value as usize];
+                if *pos == <$int>::MAX {
+                    *pos = self.values.len() as $int;
+                    self.values.push(value);
+                }
+            }
+
+            pub fn remove(&mut self, value: $int) {
+                let index = self.positions[value as usize];
+                if index != <$int>::MAX {
+                    let last = *self.values.last().unwrap();
+                    self.values[index as usize] = last;
+                    self.values.pop();
+                    self.positions[last as usize] = index;
+                    self.positions[value as usize] = <$int>::MAX;
+                }
+            }
+
+            pub fn contains(&self, value: $int) -> bool {
+                self.positions[value as usize] != <$int>::MAX
+            }
+
+            pub fn len(&self) -> usize {
+                self.values.len()
+            }
+
+            pub fn is_empty(&self) -> bool {
+                self.values.is_empty()
+            }
+
+            pub fn iter(&self) -> Iter<'_, $int> {
+                self.values.iter()
+            }
+
+            pub fn as_slice(&self) -> &[$int] {
+                &self.values
+            }
+        }
+    };
+}
+
+define_index_set!(IndexSet32, u32);
+define_index_set!(IndexSet16, u16);
+
+/// u32版の整数集合。省メモリなu16版は[`IndexSet16`]。
 ///
-/// <https://topcoder-tomerun.hatenablog.jp/entry/2021/06/12/134643>
-#[derive(Debug, Clone)]
-pub struct IndexSet {
-    values: Vec<usize>,
-    positions: Vec<Option<usize>>,
-}
-
-impl IndexSet {
-    pub fn new(n: usize) -> Self {
-        Self {
-            values: vec![],
-            positions: vec![None; n],
-        }
-    }
-
-    pub fn add(&mut self, value: usize) {
-        let pos = &mut self.positions[value];
-
-        if pos.is_none() {
-            *pos = Some(self.values.len());
-            self.values.push(value);
-        }
-    }
-
-    pub fn remove(&mut self, value: usize) {
-        if let Some(index) = self.positions[value] {
-            let last = *self.values.last().unwrap();
-            self.values[index] = last;
-            self.values.pop();
-            self.positions[last] = Some(index);
-            self.positions[value] = None;
-        }
-    }
-
-    pub fn contains(&self, value: usize) -> bool {
-        self.positions[value].is_some()
-    }
-
-    #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> usize {
-        self.values.len()
-    }
-
-    pub fn iter(&'_ self) -> Iter<'_, usize> {
-        self.values.iter()
-    }
-
-    pub fn as_slice(&self) -> &[usize] {
-        &self.values
-    }
-}
+/// ```
+/// use cp_lib_rs::data_structures::{IndexSet, IndexSet16};
+/// let mut set = IndexSet::new(100);
+/// set.add(42u32);
+/// assert_eq!(set.as_slice(), &[42u32]);
+/// let mut small = IndexSet16::new(100);
+/// small.add(42u16);
+/// assert!(small.contains(42));
+/// ```
+pub type IndexSet = IndexSet32;
 
 /// BFSを繰り返すときに訪問済みかを記録する配列を毎回初期化しなくて良くするアレ
 ///
@@ -1648,6 +1673,77 @@ mod test {
             assert_eq!(drops.get(), 7);
         }
         assert_eq!(drops.get(), 8);
+    }
+
+    #[test]
+    fn compact_index_sets_match_reference() {
+        let mut small = IndexSet16::new(257);
+        let mut large = IndexSet32::new(257);
+        let mut reference = std::collections::BTreeSet::new();
+        let mut random = 42u64;
+        for _ in 0..5000 {
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let value = ((random >> 32) % 257) as u16;
+            if random & 1 == 0 {
+                small.add(value);
+                large.add(value as u32);
+                reference.insert(value);
+            } else {
+                small.remove(value);
+                large.remove(value as u32);
+                reference.remove(&value);
+            }
+            assert_eq!(small.len(), reference.len());
+            assert_eq!(large.len(), reference.len());
+            assert_eq!(small.is_empty(), reference.is_empty());
+            assert_eq!(
+                small
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                reference
+            );
+            assert_eq!(
+                small
+                    .as_slice()
+                    .iter()
+                    .map(|&v| v as u32)
+                    .collect::<Vec<_>>(),
+                large.as_slice()
+            );
+            for i in 0..257u16 {
+                assert_eq!(small.contains(i), reference.contains(&i));
+                assert_eq!(large.contains(i as u32), reference.contains(&i));
+            }
+        }
+    }
+
+    #[test]
+    fn index_set16_full_capacity_and_reinsert() {
+        let mut set = IndexSet16::new(u16::MAX as usize);
+        for i in 0..u16::MAX {
+            set.add(i);
+        }
+        assert_eq!(set.len(), u16::MAX as usize);
+        set.remove(0);
+        set.remove(u16::MAX - 1);
+        set.add(0);
+        set.add(u16::MAX - 1);
+        for i in 0..u16::MAX {
+            assert!(set.contains(i));
+        }
+        assert_eq!(set.len(), u16::MAX as usize);
+        for i in (0..u16::MAX).rev() {
+            set.remove(i);
+        }
+        assert!(set.is_empty());
+        assert!(IndexSet32::new(0).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "IndexSet universe is too large")]
+    fn index_set16_rejects_oversized_universe() {
+        IndexSet16::new(u16::MAX as usize + 1);
     }
 
     #[test]
