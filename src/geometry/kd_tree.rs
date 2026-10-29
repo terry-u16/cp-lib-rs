@@ -1,4 +1,4 @@
-use super::squared_distance;
+use super::{KD_COORD_LIMIT, squared_distance, validate_point};
 use std::collections::BinaryHeap;
 
 const NONE: usize = usize::MAX;
@@ -15,7 +15,8 @@ struct Node {
 ///
 /// 入力順のIDを維持し、同じ座標の点も別IDとして保持する。点の追加・移動・削除は
 /// 再構築で行う。問い合わせ点自体も入力に含まれていれば検索結果に含む。
-/// 距離の二乗はi32全域で正確に計算できるu128で返す。
+/// 各座標は±10^9以内に制限し、距離の二乗をi64で返す。
+/// 範囲外の入力点・問い合わせ点、負の半径はpanicする。
 ///
 /// 構築O(N log N)、メモリO(N)。各検索は境界箱で枝刈りするが、最悪では全点を見る。
 /// k近傍は最悪O(N log(k+1) + k log(k+1))（kはN以下に切り詰める）。
@@ -38,6 +39,10 @@ pub struct KdTree {
 
 impl KdTree {
     pub fn new(points: Vec<[i32; 2]>) -> Self {
+        points
+            .iter()
+            .copied()
+            .for_each(|p| validate_point(p, KD_COORD_LIMIT));
         let mut ids: Vec<_> = (0..points.len()).collect();
         let mut tree = Self {
             nodes: Vec::with_capacity(points.len()),
@@ -88,9 +93,9 @@ impl KdTree {
         }
         index
     }
-    fn lower_bound(&self, node: usize, query: [i32; 2]) -> u128 {
+    fn lower_bound(&self, node: usize, query: [i32; 2]) -> i64 {
         if node == NONE {
-            return u128::MAX;
+            return i64::MAX;
         }
         let n = &self.nodes[node];
         let closest = [
@@ -99,7 +104,7 @@ impl KdTree {
         ];
         squared_distance(query, closest)
     }
-    fn ordered_children(&self, node: usize, query: [i32; 2]) -> [(usize, u128); 2] {
+    fn ordered_children(&self, node: usize, query: [i32; 2]) -> [(usize, i64); 2] {
         let [l, r] = self.nodes[node].children;
         let a = (l, self.lower_bound(l, query));
         let b = (r, self.lower_bound(r, query));
@@ -107,15 +112,16 @@ impl KdTree {
     }
     /// 最近傍の(点ID, 距離の二乗)。空ならNone。同距離では小さいIDを優先する。
     /// ヒープや結果Vecの確保は行わない。
-    pub fn nearest(&self, query: [i32; 2]) -> Option<(usize, u128)> {
+    pub fn nearest(&self, query: [i32; 2]) -> Option<(usize, i64)> {
+        validate_point(query, KD_COORD_LIMIT);
         if self.is_empty() {
             return None;
         }
-        let mut best = (u128::MAX, usize::MAX);
+        let mut best = (i64::MAX, usize::MAX);
         self.search_nearest(self.root, query, &mut best);
         Some((best.1, best.0))
     }
-    fn search_nearest(&self, node: usize, query: [i32; 2], best: &mut (u128, usize)) {
+    fn search_nearest(&self, node: usize, query: [i32; 2], best: &mut (i64, usize)) {
         let id = self.nodes[node].id;
         *best = (*best).min((squared_distance(query, self.points[id]), id));
         for (child, bound) in self.ordered_children(node, query) {
@@ -125,7 +131,8 @@ impl KdTree {
         }
     }
     /// 最大k点の(点ID, 距離の二乗)を、距離・IDの昇順で返す。k=0なら空。
-    pub fn k_nearest(&self, query: [i32; 2], k: usize) -> Vec<(usize, u128)> {
+    pub fn k_nearest(&self, query: [i32; 2], k: usize) -> Vec<(usize, i64)> {
+        validate_point(query, KD_COORD_LIMIT);
         let k = k.min(self.len());
         if k == 0 {
             return Vec::new();
@@ -142,7 +149,7 @@ impl KdTree {
         node: usize,
         query: [i32; 2],
         k: usize,
-        heap: &mut BinaryHeap<(u128, usize)>,
+        heap: &mut BinaryHeap<(i64, usize)>,
     ) {
         let id = self.nodes[node].id;
         let value = (squared_distance(query, self.points[id]), id);
@@ -158,22 +165,24 @@ impl KdTree {
         }
     }
     /// 半径radius以内の点ID。境界を含む。結果の順序は未規定。
-    pub fn within_radius(&self, query: [i32; 2], radius: u64) -> Vec<usize> {
+    pub fn within_radius(&self, query: [i32; 2], radius: i32) -> Vec<usize> {
         let mut result = Vec::new();
         self.within_radius_each(query, radius, |id| result.push(id));
         result
     }
     /// 結果のVecを確保せず、半径内の点IDをコールバックに渡す。
-    pub fn within_radius_each(&self, query: [i32; 2], radius: u64, mut visit: impl FnMut(usize)) {
+    pub fn within_radius_each(&self, query: [i32; 2], radius: i32, mut visit: impl FnMut(usize)) {
+        validate_point(query, KD_COORD_LIMIT);
+        assert!(radius >= 0, "radius must be non-negative");
         if self.root != NONE {
-            self.search_radius(self.root, query, u128::from(radius).pow(2), &mut visit);
+            self.search_radius(self.root, query, i64::from(radius).pow(2), &mut visit);
         }
     }
     fn search_radius(
         &self,
         node: usize,
         query: [i32; 2],
-        radius2: u128,
+        radius2: i64,
         visit: &mut impl FnMut(usize),
     ) {
         if self.lower_bound(node, query) > radius2 {
@@ -195,6 +204,29 @@ impl KdTree {
 mod tests {
     use super::*;
     #[test]
+    fn rejects_out_of_range_inputs_and_queries() {
+        for p in [
+            [KD_COORD_LIMIT + 1, 0],
+            [0, -KD_COORD_LIMIT - 1],
+            [i32::MIN, 0],
+            [0, i32::MAX],
+        ] {
+            assert!(std::panic::catch_unwind(|| KdTree::new(vec![p])).is_err());
+            let tree = KdTree::new(vec![]);
+            assert!(std::panic::catch_unwind(|| tree.nearest(p)).is_err());
+            assert!(std::panic::catch_unwind(|| tree.k_nearest(p, 0)).is_err());
+            assert!(std::panic::catch_unwind(|| tree.within_radius(p, 0)).is_err());
+        }
+        let tree = KdTree::new(vec![[0, 0]]);
+        assert!(std::panic::catch_unwind(|| tree.within_radius([0, 0], -1)).is_err());
+        let tree = KdTree::new(vec![[KD_COORD_LIMIT; 2]]);
+        assert_eq!(
+            tree.nearest([-KD_COORD_LIMIT; 2]),
+            Some((0, 8_000_000_000_000_000_000))
+        );
+    }
+
+    #[test]
     fn searches_match_exhaustive_on_duplicates_and_extreme_coordinates() {
         let mut random = 42u64;
         for n in [0, 1, 2, 31, 200] {
@@ -205,12 +237,17 @@ mod tests {
                 })
                 .collect();
             if n > 3 {
-                points[0] = [i32::MIN; 2];
-                points[1] = [i32::MAX; 2];
+                points[0] = [-KD_COORD_LIMIT; 2];
+                points[1] = [KD_COORD_LIMIT; 2];
             }
             let tree = KdTree::new(points.clone());
             assert_eq!(tree.points(), points);
-            for query in [[0, 0], [5, -2], [i32::MIN, i32::MAX], [i32::MAX; 2]] {
+            for query in [
+                [0, 0],
+                [5, -2],
+                [-KD_COORD_LIMIT, KD_COORD_LIMIT],
+                [KD_COORD_LIMIT; 2],
+            ] {
                 let mut expected: Vec<_> = points
                     .iter()
                     .enumerate()
@@ -228,13 +265,13 @@ mod tests {
                             .collect::<Vec<_>>()
                     );
                 }
-                for radius in [0u64, 5, 10, u32::MAX as u64, u64::MAX] {
+                for radius in [0i32, 5, 10, 1_000_000_000, i32::MAX] {
                     let mut actual = tree.within_radius(query, radius);
                     actual.sort_unstable();
                     let expected: Vec<_> = points
                         .iter()
                         .enumerate()
-                        .filter(|(_, p)| squared_distance(**p, query) <= u128::from(radius).pow(2))
+                        .filter(|(_, p)| squared_distance(**p, query) <= i64::from(radius).pow(2))
                         .map(|(i, _)| i)
                         .collect();
                     assert_eq!(actual, expected);
