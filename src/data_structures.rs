@@ -356,6 +356,107 @@ impl FastClearArray {
     }
 }
 
+/// 初期値へのリセットを通常O(1)で行う固定長の配列。
+///
+/// 世代が異なる要素の読み出しは、保存している初期値への参照を返す。
+/// その世代で初めて可変参照を取得するときだけ、初期値をcloneする。
+/// `set`は初期値をcloneせずに値を上書きする。
+///
+/// 構築はO(N)（初期値のcloneをN回）、世代番号が一周したときのclearはO(N)。
+/// clearでは古い値を破棄しないため、値が所有するメモリは次の更新か配列の破棄まで残る。
+/// get・get_mutと添字アクセスは、範囲外のインデックスでpanicする。
+///
+/// ```
+/// use cp_lib_rs::data_structures::FastClearVec;
+///
+/// let mut distances = FastClearVec::new(100, usize::MAX);
+/// distances[3] = 0;
+/// distances.set(4, distances[3] + 1);
+/// assert_eq!(distances[4], 1);
+/// distances.clear();
+/// assert_eq!(distances[3], usize::MAX);
+///
+/// let mut counts = FastClearVec::new(100, 0u32);
+/// *counts.get_mut(5) += 1;
+/// assert_eq!(*counts.get(5), 1);
+/// ```
+#[derive(Debug, Clone)]
+pub struct FastClearVec<T> {
+    values: Vec<T>,
+    generations: Vec<u64>,
+    generation: u64,
+    initial: T,
+}
+
+impl<T> FastClearVec<T> {
+    pub fn new(len: usize, initial: T) -> Self
+    where
+        T: Clone,
+    {
+        Self {
+            values: vec![initial.clone(); len],
+            generations: vec![0; len],
+            generation: 1,
+            initial,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        if self.generation == u64::MAX {
+            self.generations.fill(0);
+            self.generation = 1;
+        } else {
+            self.generation += 1;
+        }
+    }
+
+    pub fn get(&self, index: usize) -> &T {
+        if self.generations[index] == self.generation {
+            &self.values[index]
+        } else {
+            &self.initial
+        }
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> &mut T
+    where
+        T: Clone,
+    {
+        if self.generations[index] != self.generation {
+            self.values[index] = self.initial.clone();
+            self.generations[index] = self.generation;
+        }
+        &mut self.values[index]
+    }
+
+    pub fn set(&mut self, index: usize, value: T) {
+        self.values[index] = value;
+        self.generations[index] = self.generation;
+    }
+}
+
+impl<T> Index<usize> for FastClearVec<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &T {
+        self.get(index)
+    }
+}
+
+impl<T: Clone> IndexMut<usize> for FastClearVec<T> {
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        self.get_mut(index)
+    }
+}
+
 /// Disjoint Sparse Table
 ///
 /// モノイドに対して、区間クエリを O(1) で処理するデータ構造
@@ -1779,6 +1880,64 @@ mod test {
         assert_eq!(0, set.len());
         assert!(!set.contains(1));
         assert_eq!(set.iter().copied().sorted().collect_vec(), vec![]);
+    }
+
+    #[test]
+    fn fast_clear_vec_matches_filled_vec() {
+        let mut actual = FastClearVec::new(37, -1i64);
+        let mut expected = vec![-1i64; 37];
+        let mut random = 42u64;
+        for _ in 0..5000 {
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let index = (random >> 32) as usize % expected.len();
+            match random % 11 {
+                0 => {
+                    actual.clear();
+                    expected.fill(-1);
+                }
+                1..=5 => {
+                    actual.set(index, random as i64);
+                    expected[index] = random as i64;
+                }
+                _ => {
+                    actual[index] ^= 123;
+                    expected[index] ^= 123;
+                }
+            }
+            assert_eq!(actual.len(), expected.len());
+            for (i, value) in expected.iter().enumerate() {
+                assert_eq!(actual.get(i), value);
+            }
+        }
+    }
+
+    #[test]
+    fn fast_clear_vec_non_copy_values_and_generation_wrap() {
+        let mut values = FastClearVec::new(3, String::from("initial"));
+        values[0].push_str(" changed");
+        values.set(1, String::from("other"));
+        values.clear();
+        assert!(std::ptr::eq(values.get(0), values.get(2)));
+        values.get_mut(0).push('!');
+        assert_eq!(values[0], "initial!");
+        assert_eq!(values[1], "initial");
+        assert_eq!(values[2], "initial");
+
+        // 世代1の古い値と、最大世代の値のどちらも復活させない。
+        values.generation = u64::MAX;
+        values.set(2, String::from("last generation"));
+        values.clear();
+        for i in 0..3 {
+            assert_eq!(values[i], "initial");
+        }
+        values[1].push('?');
+        assert_eq!(values[1], "initial?");
+        values.clear();
+        assert_eq!(values[1], "initial");
+
+        let mut empty = FastClearVec::new(0, 0u32);
+        empty.clear();
+        assert!(empty.is_empty());
     }
 
     #[test]
